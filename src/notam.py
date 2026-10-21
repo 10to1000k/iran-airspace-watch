@@ -144,7 +144,7 @@ def decode_notam(notam: Notam, glossary: dict) -> str:
 
 
 class NotamCollector:
-    """کالکتور API رسمی FAA. بدون اعتبارنامه، بی‌صدا غیرفعال می‌شود."""
+    """کالکتور API رسمی FAA. بدون اعتبارنامه غیرفعال می‌شود و یک بار هشدار می‌دهد."""
 
     API = "https://external-api.faa.gov/notamapi/v1/notams"
     LOCATIONS = ("OIIE", "OIII", "OIIX")
@@ -154,6 +154,7 @@ class NotamCollector:
         self.client_id = config.env_get("FAA_NOTAM_CLIENT_ID")
         self.client_secret = config.env_get("FAA_NOTAM_CLIENT_SECRET")
         self.glossary = config.glossary
+        self._warned = False
 
     @property
     def enabled(self) -> bool:
@@ -161,7 +162,12 @@ class NotamCollector:
 
     def poll(self) -> list[RawItem]:
         if not self.enabled:
-            log.debug("NOTAM غیرفعال است: FAA_NOTAM_CLIENT_ID/SECRET تنظیم نشده")
+            if not self._warned:
+                log.warning(
+                    "NOTAM غیرفعال است: FAA_NOTAM_CLIENT_ID/SECRET تنظیم نشده. "
+                    "ثبت رایگان: https://external-api.faa.gov/notamapi"
+                )
+                self._warned = True
             return []
 
         items: list[RawItem] = []

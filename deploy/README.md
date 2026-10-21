@@ -110,6 +110,23 @@ oc rollout restart deployment/airwatch
 
 بدون بکاپ، تاریخچه‌ی دِداپ و پیام‌های ریشه از دست می‌رود (خبر جدید دوباره ارسال می‌شود، ولی چیزی نمی‌شکند).
 
+## ۶.۵ فعال‌کردن NOTAM (رایگان)
+
+بدون کلید FAA، کالکتور NOTAM خاموش می‌ماند و در لاگ این هشدار را می‌بینی:
+
+```
+NOTAM غیرفعال است: FAA_NOTAM_CLIENT_ID/SECRET تنظیم نشده
+```
+
+1. ثبت‌نام رایگان: <https://external-api.faa.gov/notamapi>
+2. دو مقدار `FAA_NOTAM_CLIENT_ID` و `FAA_NOTAM_CLIENT_SECRET` را در `.env` بگذار
+3. فقط سکرت را به‌روز کن و پاد را ری‌استارت کن (بیلد لازم نیست):
+
+```powershell
+oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml | oc apply -f -
+oc rollout restart deployment/airwatch
+```
+
 ## ۷. عیب‌یابی
 
 | نشانه | علت | راه‌حل |
