@@ -21,9 +21,11 @@ COPY run.py ./
 COPY src ./src
 COPY config ./config
 
-# UID ثابت 1001 فقط برای اجرای محلی؛ OpenShift آن را نادیده می‌گیرد
-RUN useradd --uid 1001 --create-home --shell /usr/sbin/nologin appuser \
- && mkdir -p /app/data \
+# OpenShift با UID تصادفی و GID=0 اجرا می‌کند،
+# پس همه‌ی فایل‌ها باید group-writable باشند.
+# عمداً useradd نمی‌زنیم: UID عددی برای این برنامه کافی است و
+# وابستگی به بسته‌ی passwd را حذف می‌کند.
+RUN mkdir -p /app/data \
  && chgrp -R 0 /app \
  && chmod -R g=u /app
 
