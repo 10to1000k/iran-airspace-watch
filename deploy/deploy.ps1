@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     استقرار روی OpenShift Developer Sandbox — نسخه‌ی ویندوز / PowerShell
 
@@ -86,7 +86,8 @@ function Render([string]$Source, [string]$Destination) {
 # ── سکرت ──────────────────────────────────────────────────────
 Step "ساخت/به‌روزرسانی سکرت airwatch-secrets"
 $secretFile = Join-Path $env:TEMP "airwatch-secret.yaml"
-cmd /c "oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml > `"$secretFile`""
+$cmd = "oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml > `"$secretFile`""
+cmd /c $cmd
 if ($LASTEXITCODE -ne 0) { Fail "خواندن .env و ساخت سکرت شکست خورد." }
 cmd /c "oc apply -f `"$secretFile`" >nul"
 if ($LASTEXITCODE -ne 0) { Fail "اعمال سکرت شکست خورد." }

@@ -34,6 +34,13 @@ class RssCollector:
         self.db = db
         self.max_age_hours = float(config.get("poll.max_item_age_hours", 12))
         self.per_feed = int(config.get("poll.max_items_per_feed", 15))
+        self.skip_url_parts = [
+            part.lower() for part in (config.get("poll.skip_url_parts", []) or [])
+        ]
+
+    def _should_skip(self, link: str) -> bool:
+        low = (link or "").lower()
+        return any(part in low for part in self.skip_url_parts)
 
     def poll(self) -> list[RawItem]:
         items: list[RawItem] = []
@@ -64,6 +71,8 @@ class RssCollector:
             title = util.strip_html(entry.get("title", "")).strip()
             body = _entry_body(entry)
             link = entry.get("link", "") or source["url"]
+            if self._should_skip(link):
+                continue
             if not title and not body:
                 continue
             out.append(

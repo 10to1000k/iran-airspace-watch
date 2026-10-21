@@ -161,6 +161,27 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_context_item_with_war_keyword_is_not_critical(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran says war rhetoric is rising in the region",
+                "Officials spoke about the war and attacks but flights operate normally.",
+            )
+        )
+        self.assertTrue(result.relevant)
+        self.assertNotEqual(result.severity, "critical")
+
+    def test_long_live_page_does_not_match_by_accident(self):
+        """صفحه‌های بلند کلیدواژه‌های ایران و هوانوردی را تصادفی کنار هم می‌آورند."""
+        filler = "The weather in the city was mild and traffic was normal. " * 40
+        result = self.classifier.classify(
+            self.item(
+                "Morning update",
+                filler + "Iran airspace is closed and all flights are cancelled.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
     def test_conflict_context_is_off_by_default(self):
         result = self.classifier.classify(
             self.item("Iran warns of stronger response to any new attack", "military drills")
@@ -193,6 +214,24 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertTrue(result.relevant)
         self.assertEqual(result.severity, "critical")
+
+
+class CollectorTests(unittest.TestCase):
+    def test_live_blog_and_index_urls_are_skipped(self):
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        self.assertTrue(
+            collector._should_skip(
+                "https://www.middleeasteye.net/live-blog/live-blog-update/morning-update-647"
+            )
+        )
+        self.assertTrue(collector._should_skip("https://example.com/tag/iran/"))
+        self.assertFalse(
+            collector._should_skip(
+                "https://www.aa.com.tr/en/middle-east/iran-closes-airspace/4095206"
+            )
+        )
 
 
 class HealthTests(unittest.TestCase):

@@ -50,6 +50,7 @@ class Classifier:
             self._base_severity[name] = spec.get("severity", "context")
 
         self._critical = self.settings.get("severity", {}).get("critical") or []
+        self._max_match_chars = int(self.settings.get("relevance", {}).get("max_match_chars", 1200))
 
     # ── کمکی ─────────────────────────────────────────────────
     @staticmethod
@@ -88,7 +89,8 @@ class Classifier:
 
     # ── اصلی ─────────────────────────────────────────────────
     def classify(self, item: RawItem) -> Classification:
-        text = util.normalize(item.text)
+        # سقف طول متن: صفحه‌های بلند به‌طور تصادفی کلیدواژه‌های ایران و هوانوردی را کنار هم دارند
+        text = util.normalize(item.text)[: self._max_match_chars]
         airports = self._airports_in(text)
         airlines = self.airlines.match(text)
 
@@ -104,7 +106,8 @@ class Classifier:
 
         matched = [kw for kw in self._critical if _contains(text, kw)]
         if matched:
-            severity = "critical"
+            # خبر «زمینه» با کلمه‌ی تند (جنگ/حمله) نباید هم‌ارز بستن حریم هوایی شود
+            severity = "important" if category == "context" else "critical"
         elif category in ("airspace", "airport"):
             severity = "critical" if scores[category] >= 2 else "important"
         else:
