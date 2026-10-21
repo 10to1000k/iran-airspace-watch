@@ -29,7 +29,8 @@ sources:
   - {id: ru_ria,      name: RIA Novosti,    type: rss, url: "https://ria.ru/export/rss2/archive/index.xml", lang: ru, country: RU, tier: 0}
   - {id: ru_kommersant,name: Kommersant,    type: rss, url: "https://www.kommersant.ru/RSS/news.xml", lang: ru, country: RU, tier: 2}
   - {id: ru_meduza,   name: Meduza,         type: rss, url: "https://meduza.io/rss/all", lang: ru, country: RU, tier: 2}
-  - {id: ru_lenta,    name: Lenta.ru,       type: rss, url: "https://lenta.ru/rss/news", lang: ru, country: RU, tier: 2}
+  # لنتا از داخل کلاستر همیشه تایم‌اوت می‌دهد؛ چهار منبع روسی دیگر کافی‌اند
+  - {id: ru_lenta,    name: Lenta.ru,       type: rss, url: "https://lenta.ru/rss/news", lang: ru, country: RU, tier: 2, enabled: false}
   - {id: ru_vedomosti,name: Vedomosti,      type: rss, url: "https://www.vedomosti.ru/rss/news", lang: ru, country: RU, tier: 2}
   # 401 — نیاز به اشتراک
   - {id: ru_rbc,      name: RBC,            type: rss, url: "https://rssexport.rbc.ru/rbcnews/news/30/full.rss", lang: ru, country: RU, tier: 2, enabled: false}
@@ -78,15 +79,15 @@ sources:
   # عراق — نجف باز، بغداد برای ایرلاین‌های ایرانی بسته
   - {id: iq_iraqinews,name: Iraqi News,      type: rss, url: "https://www.iraqinews.com/feed/", lang: en, country: IQ, tier: 2}
 
-  # تایلند — بانکوک و پوکت
-  - {id: th_bangkokpost,name: Bangkok Post,  type: rss, url: "https://www.bangkokpost.com/rss/data/topstories.xml", lang: en, country: TH, tier: 2}
+  # تایلند — بانکوک و پوکت (Bangkok Post از داخل کلاستر 451 می‌دهد)
+  - {id: th_thaiger,  name: The Thaiger,     type: rss, url: "https://thethaiger.com/feed/", lang: en, country: TH, tier: 2}
 
   # چین — پکن، شانگهای، گوانگژو
   - {id: cn_xinhua,   name: Xinhua (EN),     type: rss, url: "http://www.xinhuanet.com/english/rss/worldrss.xml", lang: en, country: CN, tier: 0}
   - {id: cn_cgtn,     name: CGTN (EN),       type: rss, url: "https://www.cgtn.com/subscribe/rss/section/world.xml", lang: en, country: CN, tier: 0}
 
-  # پاکستان — مقصد ماهان
-  - {id: pk_dawn,     name: Dawn,            type: rss, url: "https://www.dawn.com/feeds/home", lang: en, country: PK, tier: 2}
+  # پاکستان — مقصد ماهان (Dawn از داخل کلاستر 403 می‌دهد)
+  - {id: pk_tribune,  name: Express Tribune, type: rss, url: "https://tribune.com.pk/feed/home", lang: en, country: PK, tier: 2}
   - {id: pk_ary,      name: ARY News,        type: rss, url: "https://arynews.tv/feed/", lang: en, country: PK, tier: 2}
 
   # ویتنام — مقصد ماهان
