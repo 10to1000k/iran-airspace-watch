@@ -117,6 +117,9 @@ Render "deploy/app.yaml" ".deploy-app.rendered.yaml"
 cmd /c "oc apply -f .deploy-app.rendered.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "اعمال Deployment شکست خورد." }
 
+# تگ ایمیج ثابت است (:latest)، پس بدون restart پاد قدیمی می‌ماند.
+cmd /c "oc rollout restart deployment/airwatch >nul"
+
 Step "انتظار برای آماده‌شدن pod"
 cmd /c "oc rollout status deployment/airwatch --timeout=300s"
 if ($LASTEXITCODE -ne 0) {

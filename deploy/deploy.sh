@@ -52,6 +52,8 @@ oc start-build airwatch --follow
 # ── استقرار ───────────────────────────────────────────────────
 echo "→ استقرار"
 render deploy/app.yaml | oc apply -f -
+# تگ ایمیج ثابت است (:latest)، پس بدون restart پاد قدیمی می‌ماند
+oc rollout restart deployment/airwatch
 oc rollout status deployment/airwatch --timeout=300s
 
 echo
