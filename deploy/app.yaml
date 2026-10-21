@@ -1,0 +1,76 @@
+# مرحله ۲ — اجرای بات
+#
+# __IMAGE__ را deploy.sh پر می‌کند. مقدارش:
+#   image-registry.openshift-image-registry.svc:5000/<namespace>/iran-airspace-watch:latest
+#
+# سکرت با این دستور ساخته می‌شود (deploy.sh خودش انجام می‌دهد):
+#   oc create secret generic airwatch-secrets --from-env-file=.env
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airwatch
+  labels:
+    app: airwatch
+spec:
+  replicas: 1
+  # SQLite و getUpdates اجازه‌ی بیش از یک نمونه نمی‌دهند
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: airwatch
+  template:
+    metadata:
+      labels:
+        app: airwatch
+    spec:
+      containers:
+        - name: bot
+          image: __IMAGE__
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: airwatch-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: TZ
+              value: Asia/Tehran
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: airwatch-data

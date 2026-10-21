@@ -19,6 +19,7 @@
 | کانال‌های تلگرام (Telethon) | 🟡 اسکلت آماده، نیاز به `api_id/hash` |
 | توییتر (twscrape) | 🟡 اسکلت آماده، پیش‌فرض خاموش |
 | لیست زنده‌ی ایرلاین‌ها (OpenSky) | 🟡 اسکلت آماده، نیاز به اکانت OpenSky |
+| سرور سلامت + استقرار OpenShift | ✅ آماده |
 
 ---
 
@@ -112,13 +113,42 @@ collectors ──► classify ──► cluster/dedupe ──► translate ─�
 - **اعتبار منابع:** تاس، ریانووستی و شینهوا رسانه‌ی دولتی‌اند؛ مدوزا و بیانِت مستقل. این تفاوت در برچسب منبع دیده می‌شود.
 - **لیست ایرلاین‌ها فرضیه است:** `config/airlines.yaml` نقطه‌ی شروع است، نه واقعیت روز. با `--build-watchlist` از داده‌ی واقعی پرواز تأییدش کنید.
 
+## استقرار روی OpenShift (رایگان)
+
+این پروژه برای اجرای ۲۴/۷ روی **OpenShift Developer Sandbox** آماده شده — رایگان، بدون کارت اعتباری، با دیسک ماندگار.
+
+```bash
+oc login --token=... --server=...
+REPO=https://github.com/USERNAME/iran-airspace-watch.git ./deploy/deploy.sh
+```
+
+راهنمای کامل، تمدید ۳۰ روزه و بکاپ: [`deploy/README.md`](deploy/README.md)
+
+### سرور سلامت
+
+بات یک endpoint کوچک روی پورت ۸۰۸۰ باز می‌کند:
+
+- `/healthz` — اگر حلقه‌ی اصلی بیش از ۱۲۰ ثانیه ضربان نداشته باشد، `503` می‌دهد و k8s خودش pod را ری‌استارت می‌کند
+- `/readyz` — آمادگی برای دریافت ترافیک
+
+تست محلی:
+
+```powershell
+$env:HEALTH_PORT=18080
+.\.venv\Scripts\python.exe run.py --dry-run
+# در پنجره‌ی دیگر:
+curl.exe http://127.0.0.1:18080/healthz
+```
+
 ## ساختار
 
 ```
 config/     تنظیمات، منابع، ایرلاین‌ها، گلوساری
 src/        کد اصلی
+deploy/     فایل‌های استقرار OpenShift
 tests/      تست‌ها
 data/       دیتابیس و گزارش‌ها (در گیت نیست)
+Dockerfile  ایمیج تولیدی (non-root، سازگار با OpenShift)
 run.py      نقطه‌ی ورود
 ```
 

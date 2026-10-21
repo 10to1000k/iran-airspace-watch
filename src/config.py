@@ -89,6 +89,15 @@ class Config:
     def db_path(self) -> Path:
         return DATA_DIR / "watch.db"
 
+    @property
+    def health_port(self) -> int:
+        """HEALTH_PORT (متغیر محیطی) بر تنظیمات YAML اولویت دارد."""
+        raw = os.getenv("HEALTH_PORT") or self.get("health.port", 8080)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 8080
+
 
 def load_config(dry_run: bool = False) -> Config:
     load_dotenv(ROOT / ".env")

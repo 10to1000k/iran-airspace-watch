@@ -1,0 +1,51 @@
+# مرحله ۱ — بیلد داخل کلاستر
+#
+# __REPO__ را deploy.sh پر می‌کند (یا دستی جایگزین کن).
+# ریپو باید پابلیک باشد، چون بیلد داخل کلاستر به آن دسترسی می‌گیرد.
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: iran-airspace-watch
+  labels:
+    app: airwatch
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: airwatch
+  labels:
+    app: airwatch
+spec:
+  source:
+    type: Git
+    git:
+      uri: __REPO__
+      ref: main
+    contextDir: .
+  strategy:
+    type: Docker
+  output:
+    to:
+      kind: ImageStreamTag
+      name: iran-airspace-watch:latest
+  triggers:
+    - type: ConfigChange
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airwatch-data
+  labels:
+    app: airwatch
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

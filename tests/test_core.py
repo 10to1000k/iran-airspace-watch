@@ -165,6 +165,46 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.severity, "critical")
 
 
+class HealthTests(unittest.TestCase):
+    def test_touch_keeps_state_healthy(self):
+        from src.health import HealthState
+
+        state = HealthState(stale_seconds=5)
+        state.touch()
+        self.assertTrue(state.healthy())
+        state.mark_publish()
+        self.assertEqual(state.snapshot()["published"], 1)
+
+    def test_state_goes_stale(self):
+        import time
+
+        from src.health import HealthState
+
+        state = HealthState(stale_seconds=0)
+        time.sleep(0.02)
+        self.assertFalse(state.healthy())
+
+    def test_http_endpoint(self):
+        import json
+        import urllib.request
+
+        from src.health import HealthServer, HealthState
+
+        state = HealthState(stale_seconds=5)
+        state.touch()
+        server = HealthServer(state, port=0, host="127.0.0.1")
+        server.start()
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{server.port}/healthz", timeout=5
+            ) as response:
+                payload = json.loads(response.read().decode())
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["status"], "ok")
+        finally:
+            server.stop()
+
+
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
         config = load_config()

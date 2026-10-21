@@ -16,10 +16,11 @@ SEVERITY_RANK = {"context": 0, "important": 1, "critical": 2}
 
 
 class Pipeline:
-    def __init__(self, config, db, bot):
+    def __init__(self, config, db, bot, health=None):
         self.cfg = config
         self.db = db
         self.bot = bot
+        self.health = health
         self.classifier = Classifier(config)
         self.translator = Translator(config, db)
 
@@ -112,6 +113,8 @@ class Pipeline:
         if message_id and chat_id:
             self.db.save_message_ref(event_id, chat_id, message_id)
         self.db.attach_item_to_event(item.source_id, fp, event_id)
+        if self.health:
+            self.health.mark_publish()
         log.info("منتشر شد [%s/%s] %s", cls.severity, cls.category, item.title[:70])
         return "published"
 
