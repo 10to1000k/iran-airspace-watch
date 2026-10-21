@@ -29,7 +29,8 @@ airlines:
   - {name: Aeroflot, icao: AFL, iata: SU, country: RU, status: unknown, scope: operates,
      aliases: ["Аэрофлот", "Аэрофлот Российские авиалинии"]}
   - {name: Rossiya Airlines, icao: SDM, iata: FV, country: RU, status: unknown, scope: operates,
-     aliases: ["Россия", "Авиакомпания Россия"]}
+     # «Россия» تنها نام کشور است و هر خبر روسیه را به این ایرلاین وصل می‌کرد
+     aliases: ["Авиакомпания Россия", "Rossiya"]}
 
   # ── چین ──
   - {name: China Southern Airlines, icao: CSN, iata: CZ, country: CN, status: unknown, scope: operates,
@@ -83,7 +84,8 @@ airlines:
   - {name: Mahan Air, icao: IRM, iata: W5, country: IR, status: active, scope: operates,
      aliases: ["ماهان ایر", "ماهان"]}
   - {name: Iran Aseman Airlines, icao: IRC, iata: EP, country: IR, status: active, scope: operates,
-     aliases: ["آسمان", "ایران آسمان"]}
+     # «آسمان» به‌تنهایی یعنی sky و در هر خبر هواشناسی پیدا می‌شود
+     aliases: ["ایران آسمان", "Iran Aseman"]}
   - {name: Caspian Airlines, icao: CPN, iata: RV, country: IR, status: active, scope: operates,
      aliases: ["کاسپین"]}
   - {name: Varesh Airlines, icao: VRH, iata: VR, country: IR, status: active, scope: operates,

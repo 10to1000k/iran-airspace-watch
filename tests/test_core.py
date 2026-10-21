@@ -161,6 +161,26 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_russia_country_name_is_not_an_airline(self):
+        """«Россия» نام کشور است؛ نباید با Rossiya Airlines قاطی شود."""
+        result = self.classifier.classify(
+            self.item(
+                "Путин: Россия готова содействовать урегулированию кризиса вокруг Ирана",
+                "",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_persian_sky_word_is_not_an_airline(self):
+        """«آسمان» یعنی sky؛ ایران آسمان نام ایرلاین است."""
+        result = self.classifier.classify(
+            self.item(
+                "ایران: آسمان تهران امروز صاف است",
+                "دمای هوا در پایتخت به ۲۸ درجه می‌رسد.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
     def test_context_item_with_war_keyword_is_not_critical(self):
         result = self.classifier.classify(
             self.item(
