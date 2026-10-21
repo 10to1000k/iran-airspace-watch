@@ -130,17 +130,64 @@ relevance:
     - 机场
     - 领空
   # عبارت‌های منطقه‌ای: «امارات پروازهای خاورمیانه را متوقف کرد»
+  # عمداً «gulf» تنها نیست: با «Gulf Air» و «Gulfstream» قاطی می‌شود.
   region_keywords:
     - middle east
-    - gulf
     - persian gulf
+    - "strait of hormuz"
+    - hormuz
     - خاورمیانه
     - خلیج فارس
+    - تنگه هرمز
+    - hürmüz
+    - orta doğu
     - "ближний восток"
-    - "orta doğu"
+    - "персидский залив"
     - "الشرق الأوسط"
+    - "الخليج العربي"
+    - "مضيق هرمز"
     - 中东
-    - 海湾
+    - 波斯湾
+    - 霍尔木兹
+  # قانون منطقه فقط با این عبارت‌ها فعال می‌شود — نه با «airline» یا «airport».
+  # بدون این محدودیت، هر خبر ایرلاین در خاورمیانه مثبت کاذب می‌شود
+  # (مثلاً «Qatar Airways to fly to Western Sydney airport»).
+  airspace_signal_keywords:
+    - airspace
+    - "air space"
+    - notam
+    - fir
+    - overflight
+    - "air corridor"
+    - reroute
+    - rerouted
+    - diverted
+    - "no-fly zone"
+    - "ground stop"
+    - "airspace closed"
+    - "closed airspace"
+    - "closure of airspace"
+    - "flights suspended"
+    - "flights cancelled"
+    - "flights canceled"
+    - "suspends flights"
+    - "cancels flights"
+    - "canceled flights"
+    - "cancelled flights"
+    - حریم هوایی
+    - "بستن حریم"
+    - "لغو پرواز"
+    - "لغو پروازها"
+    - "تغییر مسیر"
+    - "مسیر پرواز"
+    - hava sahası
+    - "uçuşlar iptal"
+    - "воздушное пространство"
+    - "рейсы отменены"
+    - "المجال الجوي"
+    - "إلغاء الرحلات"
+    - 领空
+    - 航班取消
 
   # اگر true شود، خبرهای «ایران + جنگ/حمله/موشک/تحریم» هم به‌عنوان «زمینه»
   # منتشر می‌شوند. پیش‌فرض خاموش است، چون حجمشان زیاد و ربطشان غیرمستقیم است.

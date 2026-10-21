@@ -131,6 +131,36 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(index.match("What I saw today is nothing new"), [])
         self.assertEqual(index.match("THY cancelled its flights"), ["Turkish Airlines"])
 
+    def test_airline_route_news_outside_region_is_not_relevant(self):
+        """مثبت کاذب واقعی: قطر ایرویز به سیدنی — نه ایران، نه حریم هوایی."""
+        result = self.classifier.classify(
+            self.item(
+                "Qatar Airways to fly to new Western Sydney airport in 2027",
+                "The airline will launch three weekly flights from Doha to Western Sydney "
+                "International airport using Boeing 777-300ER aircraft. It is the first "
+                "Middle East carrier to serve the new airport.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_airline_airspace_suspension_in_region_is_relevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "Emirates suspends flights across Middle East airspace",
+                "The airline cancelled flights after airspace closures in the region.",
+            )
+        )
+        self.assertTrue(result.relevant)
+
+    def test_gulf_air_name_alone_is_not_a_region_signal(self):
+        result = self.classifier.classify(
+            self.item(
+                "Gulf Air adds a new route to Athens",
+                "The airline will operate four weekly flights with an Airbus A321neo aircraft.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
     def test_conflict_context_is_off_by_default(self):
         result = self.classifier.classify(
             self.item("Iran warns of stronger response to any new attack", "military drills")

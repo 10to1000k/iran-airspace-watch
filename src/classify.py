@@ -33,6 +33,10 @@ class Classifier:
         self._aviation = self.settings.get("relevance", {}).get("aviation_keywords") or []
         self._strong = self.settings.get("relevance", {}).get("strong_aviation_keywords") or []
         self._region = self.settings.get("relevance", {}).get("region_keywords") or []
+        # قانون منطقه فقط با سیگنال‌های واقعی حریم هوایی فعال می‌شود، نه با «airline».
+        self._airspace_signal = (
+            self.settings.get("relevance", {}).get("airspace_signal_keywords") or self._strong
+        )
         self._include_conflict = bool(
             self.settings.get("relevance", {}).get("include_iran_conflict_context", False)
         )
@@ -67,7 +71,7 @@ class Classifier:
         """
         if airports:
             return True
-        if airlines and self._hit(text, self._region) and self._hit(text, self._strong):
+        if airlines and self._hit(text, self._region) and self._hit(text, self._airspace_signal):
             # مثل «Emirates suspends flights across Middle East airspace»
             return True
         if not self._hit(text, self._relevance):
