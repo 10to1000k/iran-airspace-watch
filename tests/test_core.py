@@ -161,6 +161,25 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_iranian_airline_news_without_the_word_iran_is_relevant(self):
+        """خبر «ماهان ایر در گوانگژو» لزوماً کلمه‌ی ایران را ندارد."""
+        result = self.classifier.classify(
+            self.item(
+                "Mahan Air flight lands in Guangzhou despite sanctions",
+                "Flightradar24 tracked the aircraft.",
+            )
+        )
+        self.assertTrue(result.relevant)
+
+    def test_foreign_airline_route_without_iran_stays_irrelevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "Emirates adds a new route to Athens",
+                "The airline will operate four weekly flights with an A350.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
     def test_russia_country_name_is_not_an_airline(self):
         """«Россия» نام کشور است؛ نباید با Rossiya Airlines قاطی شود."""
         result = self.classifier.classify(

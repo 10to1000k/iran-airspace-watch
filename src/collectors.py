@@ -305,16 +305,19 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     telegram.start()
     x = XCollector(config, airline_index)
 
-    return [
-        CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll),
-        CollectorJob("notam", int(config.get("poll.notam_seconds", 60)), notam.poll),
+    jobs = [CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll)]
+    # NOTAM فقط اگر صریحاً روشن شده باشد؛ پیش‌فرض خاموش است (نیاز به کلید FAA ندارد).
+    if config.get("notam.enabled", False):
+        jobs.append(CollectorJob("notam", int(config.get("poll.notam_seconds", 60)), notam.poll))
+    jobs.append(
         CollectorJob(
             "telegram",
             int(config.get("poll.telegram_queue_seconds", 10)),
             telegram.poll,
-        ),
-        CollectorJob("x", int(config.get("poll.x_seconds", 90)), x.poll),
-    ]
+        )
+    )
+    jobs.append(CollectorJob("x", int(config.get("poll.x_seconds", 90)), x.poll))
+    return jobs
 
 
 def check_sources(config, db) -> int:

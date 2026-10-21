@@ -63,6 +63,12 @@ class AirlineIndex:
 
         return found
 
+    def is_iranian(self, name: str) -> bool:
+        for entry in self.airlines:
+            if entry["name"] == name:
+                return entry.get("country") == "IR"
+        return False
+
     def scope(self, name: str) -> str:
         for entry in self.airlines:
             if entry["name"] == name:

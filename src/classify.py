@@ -72,6 +72,10 @@ class Classifier:
         """
         if airports:
             return True
+        # ایرلاین ایرانی خودش «موجودیت ایرانی» است: خبر «ماهان ایر در گوانگژو»
+        # لزوماً کلمه‌ی ایران را در متن ندارد.
+        if any(self.airlines.is_iranian(name) for name in airlines):
+            return True
         if airlines and self._hit(text, self._region) and self._hit(text, self._airspace_signal):
             # مثل «Emirates suspends flights across Middle East airspace»
             return True

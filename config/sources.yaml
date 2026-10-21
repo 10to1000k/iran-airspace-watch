@@ -58,8 +58,43 @@ sources:
   - {id: av_opsgroup, name: OPSGROUP,        type: rss, url: "https://ops.group/blog/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_flightglobal,name: FlightGlobal, type: rss, url: "https://www.flightglobal.com/rss", lang: en, country: INTL, tier: 1}
   - {id: av_jacdec,   name: JACDEC,          type: rss, url: "https://www.jacdec.de/feed/", lang: en, country: INTL, tier: 1}
+  - {id: av_airlinegeeks,name: AirlineGeeks, type: rss, url: "https://airlinegeeks.com/feed/", lang: en, country: INTL, tier: 1}
+  - {id: av_aviation24,name: Aviation24.be,  type: rss, url: "https://www.aviation24.be/feed/", lang: en, country: INTL, tier: 1}
   # Aviation Herald RSS ندارد (بررسی شد)
   - {id: av_herald,   name: The Aviation Herald, type: rss, url: "https://avherald.com/rss", lang: en, country: INTL, tier: 1, enabled: false}
+
+  # ── کشورهایی که خط هوایی‌شان با ایران باز مانده (مهر ۱۴۰۵) ──
+  #
+  # وضعیت در تاریخ ۱۴۰۵/۰۷/۲۹ (اکتبر ۲۰۲۶):
+  #   باز:      چین، روسیه، ترکیه (ایران‌ایر)، افغانستان (کابل)، عراق (نجف)، تایلند، ویتنام، پاکستان
+  #   بسته:     امارات، عمان، آذربایجان، گرجستان، قطر (تجدید ۲۹ نوامبر)، آلمان/اتریش (۲۴ اکتبر)
+  #   هوایی:    بخش شرقی حریم ایران برای عبور باز، بخش غربی بسته
+  # اگر خطی باز/بسته شد، همین بلوک را به‌روز کن.
+
+  # افغانستان — کابل
+  - {id: af_ariananews,name: Ariana News,    type: rss, url: "https://www.ariananews.af/feed/", lang: en, country: AF, tier: 2}
+  - {id: af_kabulnow, name: Kabul Now,       type: rss, url: "https://kabulnow.com/feed/", lang: en, country: AF, tier: 2}
+
+  # عراق — نجف باز، بغداد برای ایرلاین‌های ایرانی بسته
+  - {id: iq_iraqinews,name: Iraqi News,      type: rss, url: "https://www.iraqinews.com/feed/", lang: en, country: IQ, tier: 2}
+
+  # تایلند — بانکوک و پوکت
+  - {id: th_bangkokpost,name: Bangkok Post,  type: rss, url: "https://www.bangkokpost.com/rss/data/topstories.xml", lang: en, country: TH, tier: 2}
+
+  # چین — پکن، شانگهای، گوانگژو
+  - {id: cn_xinhua,   name: Xinhua (EN),     type: rss, url: "http://www.xinhuanet.com/english/rss/worldrss.xml", lang: en, country: CN, tier: 0}
+  - {id: cn_cgtn,     name: CGTN (EN),       type: rss, url: "https://www.cgtn.com/subscribe/rss/section/world.xml", lang: en, country: CN, tier: 0}
+
+  # پاکستان — مقصد ماهان
+  - {id: pk_dawn,     name: Dawn,            type: rss, url: "https://www.dawn.com/feeds/home", lang: en, country: PK, tier: 2}
+  - {id: pk_ary,      name: ARY News,        type: rss, url: "https://arynews.tv/feed/", lang: en, country: PK, tier: 2}
+
+  # ویتنام — مقصد ماهان
+  - {id: vn_vnexpress,name: VnExpress Intl,  type: rss, url: "https://e.vnexpress.net/rss/news.rss", lang: en, country: VN, tier: 2}
+
+  # ایران — نسخه‌ی فارسی ایران‌اینترنشنال (پوشش حمل‌ونقل و فرودگاه)
+  - {id: ir_intl_fa,  name: Iran International (FA), type: rss, url: "https://www.iranintl.com/fa/feed", lang: fa, country: IR, tier: 2}
+
 
   # ── منطقه ──────────────────────────────────────────────────
   - {id: me_aljazeera,name: Al Jazeera,      type: rss, url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, country: INTL, tier: 2}
