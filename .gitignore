@@ -1,0 +1,16 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.session
+data/*.json
+!data/.gitkeep
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

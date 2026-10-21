@@ -1,0 +1,114 @@
+# لیست زنده‌ی ایرلاین‌ها.
+# ⚠️ این فایل «نقطه‌ی شروع» است، نه واقعیت روز.
+# وضعیت پروازها به ایران مرتب تغییر می‌کند؛ با این دستور از داده‌ی واقعی تأیید کنید:
+#     python run.py --build-watchlist
+#
+# status: active | suspended | unknown
+# scope:  operates (به ایران پرواز می‌کند) | overflies (از حریم عبور می‌کند) | statement (فقط بیانیه مهم است)
+
+airlines:
+  # ── ترکیه ──
+  - {name: Turkish Airlines, icao: THY, iata: TK, country: TR, status: unknown, scope: operates,
+     aliases: ["Türk Hava Yolları", "THY", "الخطوط الجوية التركية", "Турецкие авиалинии", "土耳其航空"]}
+  - {name: Pegasus Airlines, icao: PGT, iata: PC, country: TR, status: unknown, scope: operates,
+     aliases: ["Pegasus Hava Yolları", "بيغاسوس", "Пегасус"]}
+  - {name: AJet, icao: AJF, iata: VF, country: TR, status: unknown, scope: operates,
+     aliases: ["AnadoluJet", "آنادولو جت"]}
+
+  # ── امارات ──
+  - {name: Emirates, icao: UAE, iata: EK, country: AE, status: unknown, scope: operates,
+     aliases: ["طيران الإمارات", "Эмирейтс", "阿联酋航空"]}
+  - {name: flydubai, icao: FDB, iata: FZ, country: AE, status: unknown, scope: operates,
+     aliases: ["فلاي دبي", "Флайдубай", "迪拜航空"]}
+  - {name: Air Arabia, icao: ABY, iata: G9, country: AE, status: unknown, scope: operates,
+     aliases: ["العربية للطيران", "Эйр Арабия", "阿拉伯航空"]}
+  - {name: Etihad Airways, icao: ETD, iata: EY, country: AE, status: unknown, scope: operates,
+     aliases: ["الاتحاد للطيران", "Этихад", "阿提哈德航空"]}
+
+  # ── روسیه ──
+  - {name: Aeroflot, icao: AFL, iata: SU, country: RU, status: unknown, scope: operates,
+     aliases: ["Аэрофлот", "Аэрофлот Российские авиалинии"]}
+  - {name: Rossiya Airlines, icao: SDM, iata: FV, country: RU, status: unknown, scope: operates,
+     aliases: ["Россия", "Авиакомпания Россия"]}
+
+  # ── چین ──
+  - {name: China Southern Airlines, icao: CSN, iata: CZ, country: CN, status: unknown, scope: operates,
+     aliases: ["中国南方航空", "南航", "Китайские южные авиалинии"]}
+  - {name: Air China, icao: CCA, iata: CA, country: CN, status: unknown, scope: operates,
+     aliases: ["中国国际航空", "国航", "Эйр Чайна"]}
+
+  # ── خلیج فارس و همسایگان ──
+  - {name: Qatar Airways, icao: QTR, iata: QR, country: QA, status: unknown, scope: operates,
+     aliases: ["القطرية", "Катарские авиалинии", "卡塔尔航空"]}
+  - {name: Oman Air, icao: OMA, iata: WY, country: OM, status: unknown, scope: operates,
+     aliases: ["الطيران العماني"]}
+  - {name: SalamAir, icao: OMS, iata: OV, country: OM, status: unknown, scope: operates,
+     aliases: ["سلام ایر"]}
+  - {name: Jazeera Airways, icao: JZR, iata: J9, country: KW, status: unknown, scope: operates,
+     aliases: ["طيران الجزيرة"]}
+  - {name: Gulf Air, icao: GFA, iata: GF, country: BH, status: unknown, scope: operates,
+     aliases: ["طيران الخليج"]}
+  - {name: flynas, icao: KNE, iata: XY, country: SA, status: unknown, scope: operates,
+     aliases: ["طيران ناس"]}
+
+  # ── قفقاز و آسیای مرکزی ──
+  - {name: Azerbaijan Airlines, icao: AHY, iata: J2, country: AZ, status: unknown, scope: operates,
+     aliases: ["AZAL", "Azərbaycan Hava Yolları", "Азербайджанские авиалинии"]}
+  - {name: Georgian Airways, icao: TGZ, iata: A9, country: GE, status: unknown, scope: operates,
+     aliases: ["Джорджиан Эйрвейз"]}
+  - {name: FlyOne Armenia, icao: FIE, iata: 3F, country: AM, status: unknown, scope: operates,
+     aliases: ["ФлайУан Армения"]}
+  - {name: Air Astana, icao: KZR, iata: KC, country: KZ, status: unknown, scope: operates,
+     aliases: ["Эйр Астана", "Әуе Астана"]}
+  - {name: Uzbekistan Airways, icao: UZB, iata: HY, country: UZ, status: unknown, scope: operates,
+     aliases: ["O'zbekiston Havo Yo'llari", "Узбекские авиалинии"]}
+  - {name: Turkmenistan Airlines, icao: TUA, iata: T5, country: TM, status: unknown, scope: operates,
+     aliases: ["Türkmenhowaýollary", "Туркменские авиалинии"]}
+
+  # ── عراق، سوریه، لبنان، افغانستان ──
+  - {name: Iraqi Airways, icao: IAW, iata: IA, country: IQ, status: unknown, scope: operates,
+     aliases: ["الخطوط الجوية العراقية"]}
+  - {name: Cham Wings Airlines, icao: SAW, iata: 6Q, country: SY, status: unknown, scope: operates,
+     aliases: ["أجنحة الشام"]}
+  - {name: Middle East Airlines, icao: MEA, iata: ME, country: LB, status: unknown, scope: operates,
+     aliases: ["طيران الشرق الأوسط", "MEA"]}
+  - {name: Kam Air, icao: KMF, iata: RQ, country: AF, status: unknown, scope: operates,
+     aliases: ["کام ایر"]}
+  - {name: Ariana Afghan Airlines, icao: AFG, iata: FG, country: AF, status: unknown, scope: operates,
+     aliases: ["آریانا"]}
+
+  # ── ایرانی ──
+  - {name: Iran Air, icao: IRA, iata: IR, country: IR, status: active, scope: operates,
+     aliases: ["هما", "ایران ایر", "Иран Эйр"]}
+  - {name: Mahan Air, icao: IRM, iata: W5, country: IR, status: active, scope: operates,
+     aliases: ["ماهان ایر", "ماهان"]}
+  - {name: Iran Aseman Airlines, icao: IRC, iata: EP, country: IR, status: active, scope: operates,
+     aliases: ["آسمان", "ایران آسمان"]}
+  - {name: Caspian Airlines, icao: CPN, iata: RV, country: IR, status: active, scope: operates,
+     aliases: ["کاسپین"]}
+  - {name: Varesh Airlines, icao: VRH, iata: VR, country: IR, status: active, scope: operates,
+     aliases: ["وارش"]}
+  - {name: Zagros Airlines, icao: IZG, iata: ZV, country: IR, status: active, scope: operates,
+     aliases: ["زاگرس"]}
+  - {name: Ata Airlines, icao: TBZ, iata: I3, country: IR, status: active, scope: operates,
+     aliases: ["آتا"]}
+  - {name: Sepehran Airlines, icao: SHI, iata: IS, country: IR, status: active, scope: operates,
+     aliases: ["سپهران"]}
+  - {name: Karun Airlines, icao: IRG, iata: NV, country: IR, status: active, scope: operates,
+     aliases: ["کارون"]}
+  - {name: Qeshm Air, icao: QSM, iata: QB, country: IR, status: active, scope: operates,
+     aliases: ["قشم ایر"]}
+
+  # ── فقط برای رصد بیانیه (پرواز مستقیم ندارند ولی درباره ایران حرف می‌زنند) ──
+  - {name: Lufthansa, icao: DLH, iata: LH, country: DE, status: unknown, scope: statement,
+     aliases: ["Люфтганза", "汉莎航空"]}
+  - {name: KLM, icao: KLM, iata: KL, country: NL, status: unknown, scope: statement,
+     aliases: ["КЛМ"]}
+  - {name: British Airways, icao: BAW, iata: BA, country: GB, status: unknown, scope: statement,
+     aliases: ["Бритиш Эйрвейз"]}
+  - {name: Air France, icao: AFR, iata: AF, country: FR, status: unknown, scope: statement,
+     aliases: ["Эр Франс"]}
+  - {name: Air India, icao: AIC, iata: AI, country: IN, status: unknown, scope: statement,
+     aliases: ["Эйр Индия", "印度航空"]}
+  - {name: Pakistan International Airlines, icao: PIA, iata: PK, country: PK, status: unknown, scope: statement,
+     aliases: ["PIA", "Пакистанские авиалинии"]}

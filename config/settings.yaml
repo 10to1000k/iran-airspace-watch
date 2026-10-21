@@ -1,0 +1,249 @@
+app:
+  name: Iran Airspace Watch
+  display_timezone: Asia/Tehran
+  # پنجره‌ی خوشه‌بندی: خبرهای هم‌موضوع در این بازه به یک رخداد وصل می‌شوند
+  dedupe_window_hours: 6
+  # آستانه‌ی شباهت متنی برای یکسان‌دانستن دو خبر
+  similarity_threshold: 0.72
+  # اگر ایرلاین/فرودگاه مشترک باشد، آستانه پایین‌تر می‌آید
+  entity_boost_threshold: 0.45
+  # حداکثر طول متن خروجی (تلگرام ۴۰۹۶ کاراکتر)
+  max_body_chars: 700
+
+poll:
+  rss_seconds: 75
+  notam_seconds: 60
+  x_seconds: 90
+  telegram_queue_seconds: 10
+  # فقط آیتم‌های تازه‌تر از این بازه پردازش می‌شوند (جلوگیری از سیل اولیه)
+  max_item_age_hours: 12
+  max_items_per_feed: 15
+  x_max_queries: 5
+
+notifications:
+  # فقط این شدت‌ها با صدا می‌روند؛ بقیه بی‌صدا ولی همان لحظه
+  loud_severities: [critical]
+  silent_others: true
+  include_feedback_buttons: true
+
+# ── فیلتر ربط ────────────────────────────────────────────────
+# یک آیتم باید هم به ایران اشاره کند و هم زمینه‌ی هوانوردی داشته باشد.
+# فقط «ایران» کافی نیست، وگرنه خبر ورزشی و شهری هم رد می‌شود.
+relevance:
+  airport_codes: [OIIE, OIII, OIIX, IKA, THR]
+  keywords:
+    # فقط نام‌ها و مکان‌های ایران. اصطلاحات هوانوردی جای دیگری هستند؛
+    # وگرنه هر خبر «حریم هوایی» در دنیا به ایران وصل می‌شود.
+    fa: [ایران, ایرانی, تهران, مهرآباد, "امام خمینی"]
+    en: [iran, iranian, tehran, mehrabad, "imam khomeini", "fir tehran", "tehran fir"]
+    tr: [iran, tahran, mehrabad, "imam humeyni"]
+    ru: [иран, тегеран, мехрабад, "имам хомейни"]
+    ar: [إيران, ايران, طهران, مهرآباد, "الإمام الخميني"]
+    zh: [伊朗, 德黑兰, 梅赫拉巴德, 伊玛目霍梅尼]
+  aviation_keywords:
+    - flight
+    - flights
+    - airline
+    - airlines
+    - airport
+    - airports
+    - airspace
+    - notam
+    - fir
+    - runway
+    - aircraft
+    - aviation
+    - overflight
+    - passenger
+    - پرواز
+    - هواپیمایی
+    - هواپیما
+    - فرودگاه
+    - باند
+    - حریم هوایی
+    - مسافر
+    - uçuş
+    - havayolu
+    - havalimanı
+    - "hava sahası"
+    - авиа
+    - рейс
+    - самолет
+    - аэропорт
+    - воздушн
+    - طيران
+    - رحلة
+    - مطار
+    - "المجال الجوي"
+    - 航班
+    - 航空
+    - 机场
+    - 领空
+  # عبارت‌های فنی که به‌تنهایی برای تأیید ربط کافی‌اند.
+  # «پرواز» تنها ضعیف است (خبر ورزشی: «پرواز تیم ملی به فینال»).
+  strong_aviation_keywords:
+    - airline
+    - airlines
+    - airports
+    - airspace
+    - notam
+    - fir
+    - runway
+    - aircraft
+    - aviation
+    - overflight
+    - "ground stop"
+    - "air force"
+    - airbase
+    - "air base"
+    - "no-fly zone"
+    - "cancel flights"
+    - "flights cancelled"
+    - "flights suspended"
+    - "flights canceled"
+    - فرودگاه
+    - هواپیمایی
+    - هواپیما
+    - باند
+    - حریم هوایی
+    - "لغو پرواز"
+    - "لغو پروازها"
+    - "تأخیر پرواز"
+    - havayolu
+    - havalimanı
+    - "hava sahası"
+    - авиакомпания
+    - аэропорт
+    - самолет
+    - "рейсы отменены"
+    - طيران
+    - مطار
+    - "المجال الجوي"
+    - 航空
+    - 机场
+    - 领空
+  # عبارت‌های منطقه‌ای: «امارات پروازهای خاورمیانه را متوقف کرد»
+  region_keywords:
+    - middle east
+    - gulf
+    - persian gulf
+    - خاورمیانه
+    - خلیج فارس
+    - "ближний восток"
+    - "orta doğu"
+    - "الشرق الأوسط"
+    - 中东
+    - 海湾
+
+  # اگر true شود، خبرهای «ایران + جنگ/حمله/موشک/تحریم» هم به‌عنوان «زمینه»
+  # منتشر می‌شوند. پیش‌فرض خاموش است، چون حجمشان زیاد و ربطشان غیرمستقیم است.
+  include_iran_conflict_context: false
+  conflict_keywords:
+    - war
+    - strike
+    - missile
+    - attack
+    - military
+    - sanctions
+    - hormuz
+    - جنگ
+    - حمله
+    - موشک
+    - نظامی
+    - تحریم
+    - هرمز
+    - война
+    - удар
+    - ракет
+    - санкции
+    - savaş
+    - füze
+    - حرب
+    - صاروخ
+    - 战争
+    - 导弹
+
+# ── دسته‌بندی ────────────────────────────────────────────────
+categories:
+  airspace:
+    fa: حریم هوایی
+    severity: critical
+    keywords:
+      - notam
+      - fir
+      - oiix
+      - airspace
+      - overflight
+      - حریم هوایی
+      - hava sahası
+      - воздушное пространство
+      - المجال الجوي
+      - 领空
+  airport:
+    fa: فرودگاه
+    severity: critical
+    keywords:
+      - runway
+      - ground stop
+      - terminal
+      - باند
+      - فرودگاه
+      - mehrabad
+      - مهرآباد
+      - imam khomeini
+      - امام خمینی
+      - havalimanı
+      - аэропорт
+      - مطار
+      - 机场
+  airline:
+    fa: ایرلاین
+    severity: important
+    keywords:
+      - suspend flights
+      - resume flights
+      - cancel flights
+      - لغو پرواز
+      - ازسرگیری
+      - рейс
+      - сефер
+      - رحلة
+      - 航班
+  context:
+    fa: زمینه
+    severity: context
+    keywords:
+      - sanction
+      - تحریم
+      - tension
+      - تنش
+      - military
+      - نظامی
+      - رزمایش
+      - "пво"
+      - "air defense"
+
+# ── کلمات کلیدی شدت ─────────────────────────────────────────
+severity:
+  critical:
+    - closed
+    - closure
+    - shut
+    - evacuated
+    - emergency
+    - crash
+    - missile
+    - strike
+    - attack
+    - war
+    - ground stop
+    - بسته
+    - اضطراری
+    - سقوط
+    - موشک
+    - حمله
+    - جنگ
+    - закрыт
+    - kapatıldı
+    - مغلق
+    - 关闭
