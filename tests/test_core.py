@@ -205,6 +205,90 @@ class HealthTests(unittest.TestCase):
             server.stop()
 
 
+class TranslatorTests(unittest.TestCase):
+    def test_falls_back_when_model_is_overloaded(self):
+        import os
+        from unittest import mock
+
+        import requests as requests_module
+
+        from src.translator import Translator
+
+        config = load_config()
+        translator = Translator(config, db=None)
+        translator.api_key = "test-key"
+        translator.model = "busy-model"
+        translator.fallbacks = ["working-model"]
+
+        class FakeResponse:
+            def __init__(self, status_code, payload=None):
+                self.status_code = status_code
+                self._payload = payload or {}
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests_module.HTTPError(str(self.status_code))
+
+        calls = []
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append(json["model"])
+            if json["model"] == "busy-model":
+                return FakeResponse(503)
+            return FakeResponse(200, {"choices": [{"message": {"content": "تیتر\n---\nمتن"}}]})
+
+        with mock.patch("src.translator.requests.post", side_effect=fake_post):
+            output = translator._chat("hello", "system")
+
+        self.assertIn("تیتر", output)
+        self.assertEqual(translator.active_model, "working-model")
+        self.assertIn("busy-model", calls)
+        self.assertIn("working-model", calls)
+
+    def test_falls_back_when_model_is_removed(self):
+        from unittest import mock
+
+        import requests as requests_module
+
+        from src.translator import Translator
+
+        config = load_config()
+        translator = Translator(config, db=None)
+        translator.api_key = "test-key"
+        translator.model = "gone-model"
+        translator.fallbacks = ["working-model"]
+
+        class FakeResponse:
+            def __init__(self, status_code, payload=None):
+                self.status_code = status_code
+                self._payload = payload or {}
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests_module.HTTPError(str(self.status_code))
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            if json["model"] == "gone-model":
+                return FakeResponse(404)
+            return FakeResponse(200, {"choices": [{"message": {"content": "ok"}}]})
+
+        with mock.patch("src.translator.requests.post", side_effect=fake_post):
+            self.assertEqual(translator._chat("hello", "system"), "ok")
+
+    def test_persian_passthrough_needs_no_network(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        result = translator.translate_item("لغو پرواز", "متن فارسی", "fa")
+        self.assertEqual(result.engine, "passthrough-fa")
+
+
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
         config = load_config()

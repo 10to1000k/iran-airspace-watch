@@ -86,6 +86,17 @@ class Config:
         return os.getenv("LLM_MODEL") or "gpt-4o-mini"
 
     @property
+    def llm_fallback_models(self) -> list[str]:
+        """مدل‌های جانشین؛ با کاما جدا می‌شوند. اگر مدل اصلی شلوغ/حذف‌شده بود امتحان می‌شوند."""
+        raw = os.getenv("LLM_FALLBACK_MODELS")
+        if raw:
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        configured = self.get("llm.fallback_models", []) or []
+        if isinstance(configured, str):
+            configured = configured.split(",")
+        return [str(item).strip() for item in configured if str(item).strip()]
+
+    @property
     def db_path(self) -> Path:
         return DATA_DIR / "watch.db"
 

@@ -35,9 +35,18 @@ class Translator:
         self.api_key = config.llm_api_key
         self.base_url = config.llm_base_url
         self.model = config.llm_model
+        self.fallbacks = config.llm_fallback_models
+        self.active_model = self.model
         self.glossary = config.glossary
         self._memory_cache: dict[str, str] = {}
         self._warned = False
+
+    def _model_chain(self) -> list[str]:
+        chain: list[str] = []
+        for name in [self.model, *self.fallbacks]:
+            if name and name not in chain:
+                chain.append(name)
+        return chain
 
     @property
     def enabled(self) -> bool:
@@ -71,35 +80,41 @@ class Translator:
         return "\n".join(lines) or "- (no specific terms)"
 
     def _chat(self, user_content: str, system: str) -> str:
-        payload = {
-            "model": self.model,
-            "temperature": 0.1,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-        }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ]
         last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                response = requests.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=60,
-                )
-                if response.status_code in (429, 500, 502, 503, 504):
-                    raise requests.HTTPError(f"HTTP {response.status_code}")
-                response.raise_for_status()
-                data = response.json()
-                return (data["choices"][0]["message"]["content"] or "").strip()
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                time.sleep(1.5 * (attempt + 1))
+        # مدل‌ها به ترتیب امتحان می‌شوند: اگر یکی شلوغ (503) یا حذف‌شده (404) بود،
+        # بعدی امتحان می‌شود تا ترجمه‌ی خبر عقب نیفتد.
+        for model in self._model_chain():
+            for attempt in range(2):
+                try:
+                    response = requests.post(
+                        f"{self.base_url}/chat/completions",
+                        json={"model": model, "temperature": 0.1, "messages": messages},
+                        headers=headers,
+                        timeout=60,
+                    )
+                    if response.status_code == 404:
+                        last_error = requests.HTTPError(f"مدل {model} موجود نیست (404)")
+                        break
+                    if response.status_code in (429, 500, 502, 503, 504):
+                        raise requests.HTTPError(f"HTTP {response.status_code} از {model}")
+                    response.raise_for_status()
+                    data = response.json()
+                    content = (data["choices"][0]["message"]["content"] or "").strip()
+                    if model != self.active_model:
+                        log.info("مدل ترجمه به %s تغییر کرد", model)
+                        self.active_model = model
+                    return content
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    time.sleep(1.0 * (attempt + 1))
         raise RuntimeError(f"ترجمه ناموفق بود: {last_error}")
 
     # ── API عمومی ────────────────────────────────────────────
@@ -179,7 +194,7 @@ class Translator:
         ok = util.numbers_preserved(f"{title} {body} {raw}", f"{head} {body_fa}")
         if not ok:
             log.warning("اعداد در ترجمه حفظ نشدند: %s", title[:80])
-        return Translation(text_fa=body_fa, title_fa=head, engine=self.model, numbers_ok=ok)
+        return Translation(text_fa=body_fa, title_fa=head, engine=self.active_model, numbers_ok=ok)
 
 
 def _hash(text: str) -> str:
