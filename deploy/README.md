@@ -118,9 +118,20 @@ oc rollout restart deployment/airwatch
 NOTAM غیرفعال است: FAA_NOTAM_CLIENT_ID/SECRET تنظیم نشده
 ```
 
-1. ثبت‌نام رایگان: <https://external-api.faa.gov/notamapi>
-2. دو مقدار `FAA_NOTAM_CLIENT_ID` و `FAA_NOTAM_CLIENT_SECRET` را در `.env` بگذار
-3. فقط سکرت را به‌روز کن و پاد را ری‌استارت کن (بیلد لازم نیست):
+1. ثبت‌نام در پورتال API سازمان هوانوردی: <https://api.faa.gov>
+2. در پورتال، API مربوط به NOTAM را جست‌وجو کن و برای نسخه‌ی Production درخواست اشتراک بده (approval لازم است)
+3. بعد از تأیید، `client_id` و `client_secret` را برمی‌داری و در `.env` می‌گذاری:
+
+```
+FAA_NOTAM_CLIENT_ID=...
+FAA_NOTAM_CLIENT_SECRET=...
+```
+
+4. فقط سکرت را به‌روز کن و پاد را ری‌استارت کن (بیلد لازم نیست):
+
+> نکته: آدرس `https://external-api.faa.gov/notamapi` که در نسخه‌های قبلی گفته شده بود **صفحه‌ی ثبت‌نام نیست**؛ ریشه‌ی خود API است و در مرورگر خطای
+> `No context-path matches the request URI.` می‌دهد. این خطا طبیعی است.
+> آدرس واقعی که کد صدا می‌زند `https://external-api.faa.gov/notamapi/v1/notams` است و بدون کلید `401 Unauthorized` برمی‌گرداند.
 
 ```powershell
 oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml | oc apply -f -

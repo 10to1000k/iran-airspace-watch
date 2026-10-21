@@ -165,7 +165,7 @@ class NotamCollector:
             if not self._warned:
                 log.warning(
                     "NOTAM غیرفعال است: FAA_NOTAM_CLIENT_ID/SECRET تنظیم نشده. "
-                    "ثبت رایگان: https://external-api.faa.gov/notamapi"
+                    "ثبت رایگان در پورتال API سازمان هوانوردی: https://api.faa.gov"
                 )
                 self._warned = True
             return []
