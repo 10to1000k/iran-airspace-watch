@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Check config and NOTAM decoder
+        run: |
+          python run.py --decode-notam "A1234/26 NOTAMN Q) OIII/QMXLC/IV/NBO/A/000/999/3541N05119E005 A) OIII B) 2610210600 C) 2610211200 E) RWY 29L CLSD"

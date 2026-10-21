@@ -15,3 +15,4 @@ data/*.json
 .DS_Store
 Thumbs.db
 backups/
+.deploy-*.rendered.yaml

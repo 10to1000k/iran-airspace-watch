@@ -52,6 +52,14 @@ LLM_MODEL=gemini-2.0-flash
 
 ## ۴. استقرار
 
+**ویندوز / PowerShell** (بدون نیاز به Git Bash):
+
+```powershell
+.\deploy\deploy.ps1
+```
+
+**لینوکس / macOS / Git Bash:**
+
 ```bash
 chmod +x deploy/deploy.sh
 REPO=https://github.com/USERNAME/iran-airspace-watch.git ./deploy/deploy.sh
