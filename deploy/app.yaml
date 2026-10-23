@@ -12,6 +12,10 @@ metadata:
   name: airwatch
   labels:
     app: airwatch
+  annotations:
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"iran-airspace-watch:latest"},
+      "fieldPath":"spec.template.spec.containers[?(@.name==\"bot\")].image"}]
 spec:
   replicas: 1
   # SQLite و getUpdates اجازه‌ی بیش از یک نمونه نمی‌دهند
