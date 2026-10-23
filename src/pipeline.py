@@ -32,16 +32,22 @@ class Pipeline:
         if not self.db.add_item(item, fp):
             return "seen"
 
-        classification = self.classifier.classify(item)
-        if not classification.relevant:
-            return "irrelevant"
+        try:
+            classification = self.classifier.classify(item)
+            if not classification.relevant:
+                return "irrelevant"
 
-        tokens = util.tokens(f"{item.title} {item.body}")
-        existing = self._find_cluster(tokens, classification)
+            tokens = util.tokens(f"{item.title} {item.body}")
+            existing = self._find_cluster(tokens, classification)
 
-        if existing is None:
-            return self._create_event(item, fp, classification, tokens)
-        return self._update_event(item, fp, classification, existing)
+            if existing is None:
+                return self._create_event(item, fp, classification, tokens)
+            return self._update_event(item, fp, classification, existing)
+        except Exception:
+            # اگر قبل از اتصال آیتم به رخداد خطای غیرمنتظره رخ داد، آیتم را آزاد کن
+            # تا در چرخه‌ی بعدی دوباره پردازش شود و برای همیشه نسوزد.
+            self.db.delete_item(item.source_id, fp)
+            raise
 
     # ── خوشه‌بندی ────────────────────────────────────────────
     def _find_cluster(self, tokens: set[str], classification):
@@ -97,26 +103,53 @@ class Pipeline:
             row = self.db.get_event(event_id)
             return self._update_event(item, fp, cls, row) if row else "raced"
 
+        # اول آیتم به رخداد وصل می‌شود تا حتی اگر ارسال تلگرام موقتاً شکست خورد،
+        # رخداد ساخته بماند و flush_unsent در چرخه‌ی بعدی آن را ارسال کند.
+        self.db.attach_item_to_event(item.source_id, fp, event_id)
         event = self.db.get_event(event_id)
+        if not self._deliver_event(event):
+            log.warning("رخداد %d ثبت شد ولی ارسال تلگرام به چرخه‌ی بعد موکول شد", event_id)
+            return "queued"
+        log.info("منتشر شد [%s/%s] %s", cls.severity, cls.category, item.title[:70])
+        return "published"
+
+    def _deliver_event(self, event) -> bool:
+        event_id = int(event["id"])
         text = formatter.format_event(event, self.cfg)
-        message_id = None
         if self.cfg.get("notifications.include_feedback_buttons", True):
-            keyboard = self.bot.feedback_keyboard(event_id, item.url)
+            keyboard = self.bot.feedback_keyboard(event_id, event["primary_url"] or "")
         else:
             keyboard = None
-        message_id = self.bot.send(
-            text,
-            silent=self._silent(cls.severity),
-            keyboard=keyboard,
-        )
+        try:
+            message_id = self.bot.send(
+                text,
+                silent=self._silent(event["severity"]),
+                keyboard=keyboard,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ارسال تلگرام برای رخداد %d ناموفق بود: %s", event_id, exc)
+            return False
+
         chat_id = self.bot.chat_id()
         if message_id and chat_id:
             self.db.save_message_ref(event_id, chat_id, message_id)
-        self.db.attach_item_to_event(item.source_id, fp, event_id)
-        if self.health:
-            self.health.mark_publish()
-        log.info("منتشر شد [%s/%s] %s", cls.severity, cls.category, item.title[:70])
-        return "published"
+            if self.health:
+                self.health.mark_publish()
+            return True
+        return bool(self.cfg.dry_run)
+
+    def flush_unsent(self) -> int:
+        """ارسال مجدد رخدادهای تازه‌ای که به خاطر قطعی موقت شبکه یا نبود گیرنده جا مانده‌اند."""
+        if self.cfg.dry_run or not self.bot.configured or not self.bot.chat_id():
+            return 0
+        window = float(self.cfg.get("app.dedupe_window_hours", 6))
+        sent = 0
+        for event in self.db.unsent_events(hours=window, limit=5):
+            if self._deliver_event(event):
+                sent += 1
+        if sent:
+            log.info("%d رخداد جامانده با موفقیت به تلگرام ارسال شد", sent)
+        return sent
 
     # ── به‌روزرسانی رخداد موجود ──────────────────────────────
     def _update_event(self, item: RawItem, fp: str, cls, event) -> str:
@@ -155,11 +188,14 @@ class Pipeline:
                 log.debug("ویرایش پیام ریشه ناموفق: %s", exc)
 
         if new_source and int(refreshed["sources_count"]) <= 3 and refreshed["root_message_id"]:
-            self.bot.send(
-                formatter.format_update(refreshed, item.source_name),
-                reply_to=int(refreshed["root_message_id"]),
-                silent=self._silent(refreshed["severity"]),
-            )
+            try:
+                self.bot.send(
+                    formatter.format_update(refreshed, item.source_name),
+                    reply_to=int(refreshed["root_message_id"]),
+                    silent=self._silent(refreshed["severity"]),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc)
 
         log.info("به‌روزرسانی [%s] %s", event_id, item.title[:70])
         return "updated"

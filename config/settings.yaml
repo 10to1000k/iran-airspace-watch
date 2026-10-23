@@ -9,9 +9,12 @@ app:
   entity_boost_threshold: 0.45
   # حداکثر طول متن خروجی (تلگرام ۴۰۹۶ کاراکتر)
   max_body_chars: 700
+  # نگه‌داری آیتم‌های خام در دیتابیس (پاک‌سازی خودکار روزانه)
+  retention_days: 30
 
 poll:
   rss_seconds: 75
+  rss_workers: 6
   notam_seconds: 60
   x_seconds: 90
   telegram_queue_seconds: 10
@@ -21,11 +24,11 @@ poll:
   x_max_queries: 5
   # صفحه‌های چرخشی و آرشیوی «خبر واحد» نیستند: با هر به‌روزرسانی دوباره ثبت
   # می‌شوند و متن‌شان آن‌قدر متنوع است که تقریباً هر فیلتری را رد می‌کند.
+  # نکته: «/blog/» نباید اینجا باشد چون Flightradar24 و OPSGROUP زیر /blog/ مقاله منتشر می‌کنند.
   skip_url_parts:
     - /live-blog
     - /liveblog
     - /live/
-    - /blog/
     - /tag/
     - /topic/
     - /author/
@@ -43,12 +46,12 @@ notifications:
   silent_others: true
   include_feedback_buttons: true
 
-# سرور سلامت برای probeهای OpenShift. اگر حلقه‌ی اصلی کد بخوابد،
-# k8s خودش pod را ری‌استارت می‌کند.
+# سرور سلامت برای probeهای OpenShift. اگر حلقه‌ی اصلی، کالکتورها یا نخ تلگرام
+# قفل شوند، k8s خودش pod را ری‌استارت می‌کند.
 health:
   enabled: true
   port: 8080
-  stale_seconds: 120
+  stale_seconds: 300
 
 # ── فیلتر ربط ────────────────────────────────────────────────
 # یک آیتم باید هم به ایران اشاره کند و هم زمینه‌ی هوانوردی داشته باشد.

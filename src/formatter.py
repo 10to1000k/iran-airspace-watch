@@ -20,6 +20,9 @@ COUNTRY_LABEL = {
     "AE": "امارات",
     "RU": "روسیه",
     "CN": "چین",
+    "PK": "پاکستان",
+    "TH": "تایلند",
+    "VN": "ویتنام",
     "QA": "قطر",
     "OM": "عمان",
     "KW": "کویت",
@@ -35,6 +38,12 @@ COUNTRY_LABEL = {
     "KZ": "قزاقستان",
     "UZ": "ازبکستان",
     "TM": "ترکمنستان",
+    "DE": "آلمان",
+    "AT": "اتریش",
+    "NL": "هلند",
+    "GB": "بریتانیا",
+    "FR": "فرانسه",
+    "IN": "هند",
     "INTL": "بین‌المللی",
 }
 CONFIDENCE_LABEL = {
@@ -136,5 +145,5 @@ def format_update(event, source_name: str, note: str = "") -> str:
 def format_publication_notice(event) -> str:
     return (
         f"🔴 <b>انتشار</b>\n{html.escape(util.truncate(_get(event, 'title_fa'), 120))}\n"
-        f"#{_tag('هشدار')}"
+        f"{_tag('هشدار')}"
     )

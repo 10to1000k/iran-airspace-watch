@@ -35,8 +35,10 @@ def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", strip_html(text or ""))
     text = text.translate(_CHAR_MAP).replace("\u200c", " ")
     text = _DIACRITICS.sub("", text)
+    # در زبان ترکی «İran».lower() کاراکتر ترکیبی i+\u0307 می‌سازد و با «iran» جور نمی‌شود
+    text = text.lower().replace("\u0307", "")
     text = re.sub(r"\s+", " ", text)
-    return text.strip().lower()
+    return text.strip()
 
 
 def fingerprint(*parts: str) -> str:

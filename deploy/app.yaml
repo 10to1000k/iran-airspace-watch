@@ -1,9 +1,9 @@
-# مرحله ۲ — اجرای بات
+# مرحله ۲ — اجرای بات + بیدارنگه‌دارنده‌ی خودکار (ضد Idler دوازده‌ساعته‌ی OpenShift Sandbox)
 #
-# __IMAGE__ را deploy.sh پر می‌کند. مقدارش:
+# __IMAGE__ را deploy.sh / deploy.ps1 پر می‌کند. مقدارش:
 #   image-registry.openshift-image-registry.svc:5000/<namespace>/iran-airspace-watch:latest
 #
-# سکرت با این دستور ساخته می‌شود (deploy.sh خودش انجام می‌دهد):
+# سکرت با این دستور ساخته می‌شود (اسکریپت خودش انجام می‌دهد):
 #   oc create secret generic airwatch-secrets --from-env-file=.env
 ---
 apiVersion: apps/v1
@@ -25,6 +25,7 @@ spec:
       labels:
         app: airwatch
     spec:
+      terminationGracePeriodSeconds: 20
       containers:
         - name: bot
           image: __IMAGE__
@@ -54,7 +55,7 @@ spec:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 40
+            initialDelaySeconds: 45
             periodSeconds: 60
             timeoutSeconds: 5
             failureThreshold: 3
@@ -74,3 +75,85 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: airwatch-data
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airwatch-keepalive
+  labels:
+    app: airwatch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airwatch-keepalive
+  labels:
+    app: airwatch
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airwatch-keepalive
+  labels:
+    app: airwatch
+subjects:
+  - kind: ServiceAccount
+    name: airwatch-keepalive
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: airwatch-keepalive
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: airwatch-keepalive
+  labels:
+    app: airwatch
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 240
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 120
+      activeDeadlineSeconds: 60
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: airwatch-keepalive
+        spec:
+          serviceAccountName: airwatch-keepalive
+          restartPolicy: Never
+          containers:
+            - name: keepalive
+              image: __IMAGE__
+              imagePullPolicy: IfNotPresent
+              command: ["python", "run.py", "--keepalive"]
+              env:
+                - name: KEEPALIVE_DEPLOYMENT
+                  value: airwatch
+                - name: KEEPALIVE_APP_LABEL
+                  value: airwatch
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 48Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
