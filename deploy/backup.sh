@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# بکاپ و بازگردانی دیتابیس روی OpenShift
+# بکاپ اتمی و بازگردانی دیتابیس روی OpenShift
 #
 #   ./deploy/backup.sh                       → بکاپ در backups/
 #   ./deploy/backup.sh restore backups/x.tgz → بازگردانی
 #
-# روش: آرشیو داخل pod ساخته می‌شود، سالم‌بودنش همان‌جا چک می‌شود،
-# بعد با oc cp کپی می‌شود. استریم مستقیم tar به stdout قابل‌اعتماد نیست
-# (یک بار فایل ناقص تولید کرد).
+# نکات ایمنی:
+#   ۱) اگر Deployment به replicas=0 رفته باشد، برای بکاپ خودکار بیدارش می‌کند.
+#   ۲) به جای tar مستقیم روی فایل بازِ WAL، از sqlite3.backup() آنلاین استفاده می‌کند.
+#   ۳) هنگام بازگردانی فایل‌های کهنه‌ی watch.db-wal/shm پاک می‌شوند تا دیتابیس خراب نشود.
 
 set -euo pipefail
 
@@ -15,12 +16,10 @@ cd "$ROOT"
 
 NAMESPACE="$(oc project -q)"
 IMAGE="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/iran-airspace-watch:latest"
-POD="$(oc get pod -l app=airwatch -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 
 if [ "${1:-}" = "restore" ]; then
   FILE="${2:-}"
   [ -f "$FILE" ] || { echo "استفاده: $0 restore backups/data-YYYY-MM-DD-HHMMSS.tgz"; exit 1; }
-  [ -n "$POD" ] || { echo "خطا: pod پیدا نشد."; exit 1; }
 
   echo "→ توقف بات (تا کسی وسط بازگردانی روی دیتابیس ننویسد)"
   oc scale deployment/airwatch --replicas=0
@@ -59,21 +58,40 @@ spec:
 EOF
   oc wait --for=condition=Ready pod/airwatch-restore --timeout=180s
   oc cp "$FILE" airwatch-restore:/tmp/restore.tgz
+  # حذف WAL/SHM قبلی حیاتی است تا روی watch.db بازگردانی‌شده اعمال نشوند
+  oc exec airwatch-restore -- rm -f /app/data/watch.db-wal /app/data/watch.db-shm
   # --no-overwrite-dir: UID تصادفی اجازه‌ی chmod/utime روی ریشه‌ی volume را ندارد
   oc exec airwatch-restore -- tar xzf /tmp/restore.tgz -C /app/data --no-overwrite-dir
   echo "✅ بازگردانی شد."
   exit 0
 fi
 
+POD="$(oc get pod -l app=airwatch --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+if [ -z "$POD" ]; then
+  echo "→ Pod فعال نبود؛ در حال بیدار کردن Deployment برای تهیه بکاپ..."
+  oc scale deployment/airwatch --replicas=1
+  oc rollout status deployment/airwatch --timeout=180s
+  POD="$(oc get pod -l app=airwatch --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+fi
 [ -n "$POD" ] || { echo "خطا: pod پیدا نشد. اول استقرار را انجام بده."; exit 1; }
 
 mkdir -p backups
 OUT="backups/data-$(date +%Y-%m-%d-%H%M%S).tgz"
 
-echo "→ ساخت آرشیو داخل $POD"
-# فایل‌ها صریح نام برده می‌شوند تا خودِ پوشه‌ی . در آرشیو نباشد؛
-# وگرنه بازگردانی موقع chmod روی ریشه‌ی volume با UID تصادفی شکست می‌خورد.
-oc exec "$POD" -- tar czf /tmp/airwatch-backup.tgz --ignore-failed-read -C /app/data watch.db watch.db-wal watch.db-shm telegram
+echo "→ تهیه اسنپ‌شات اتمی SQLite و ساخت آرشیو داخل $POD"
+oc exec "$POD" -- python -c "
+import os, shutil, sqlite3
+os.makedirs('/tmp/airwatch-snap', exist_ok=True)
+if os.path.exists('/app/data/watch.db'):
+    src = sqlite3.connect('/app/data/watch.db', timeout=30)
+    dst = sqlite3.connect('/tmp/airwatch-snap/watch.db')
+    src.backup(dst)
+    dst.close()
+    src.close()
+if os.path.exists('/app/data/telegram'):
+    shutil.copytree('/app/data/telegram', '/tmp/airwatch-snap/telegram', dirs_exist_ok=True)
+"
+oc exec "$POD" -- tar czf /tmp/airwatch-backup.tgz --ignore-failed-read -C /tmp/airwatch-snap watch.db telegram
 oc exec "$POD" -- tar tzf /tmp/airwatch-backup.tgz >/dev/null
 
 REMOTE_SIZE="$(oc exec "$POD" -- stat -c %s /tmp/airwatch-backup.tgz | tr -d '\r')"
@@ -93,7 +111,7 @@ for attempt in 1 2 3 4 5; do
   echo "   تلاش $attempt ناموفق بود، دوباره..."
   sleep 4
 done
-oc exec "$POD" -- rm -f /tmp/airwatch-backup.tgz
+oc exec "$POD" -- rm -rf /tmp/airwatch-backup.tgz /tmp/airwatch-snap
 
 if [ "$COPIED" != "1" ]; then
   rm -f "$PART"

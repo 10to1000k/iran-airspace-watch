@@ -4,6 +4,7 @@
 نمونه‌ها:
     python run.py                      # اجرای دائمی
     python run.py --once --dry-run     # یک چرخه، بدون ارسال به تلگرام
+    python run.py --keepalive          # بیدارنگه‌دارنده‌ی خودکار OpenShift (CronJob)
     python run.py --check-sources      # تست فیدهای RSS
     python run.py --decode-notam "..." # دیکود یک NOTAM
     python run.py --test-message       # ارسال پیام نمونه
@@ -35,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="پایش اخبار حریم هوایی ایران و ارسال فوری به تلگرام",
     )
     parser.add_argument("--once", action="store_true", help="یک چرخه اجرا کن و خارج شو")
+    parser.add_argument("--keepalive", action="store_true", help="بررسی و بیدار نگه‌داشتن Deployment در OpenShift")
     parser.add_argument("--dry-run", action="store_true", help="بدون تماس با تلگرام، چاپ در کنسول")
     parser.add_argument("--check-sources", action="store_true", help="تست سلامت فیدهای RSS")
     parser.add_argument("--decode-notam", metavar="TEXT", help="دیکود یک NOTAM خام")
@@ -79,6 +81,12 @@ def sample_event() -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging(args.verbose)
+
+    if args.keepalive:
+        from src.keepalive import run_keepalive
+
+        return run_keepalive()
+
     config = load_config(dry_run=args.dry_run)
 
     if args.decode_notam:

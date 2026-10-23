@@ -254,9 +254,24 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(result.relevant)
         self.assertEqual(result.severity, "critical")
 
+    def test_uppercase_airline_code_matched_inside_classifier(self):
+        """کدهای ۳حرفی بزرگ مثل THY و PIA باید داخل Classifier هم تشخیص داده شوند."""
+        tr_item = self.classifier.classify(
+            self.item("THY İran seferlerini iptal etti", "", lang="tr", country="TR")
+        )
+        self.assertTrue(tr_item.relevant)
+        self.assertIn("Turkish Airlines", tr_item.airlines)
+
+        pk_item = self.classifier.classify(
+            self.item("PIA suspends flights to Iran over airspace warning", "", country="PK")
+        )
+        self.assertTrue(pk_item.relevant)
+        self.assertIn("Pakistan International Airlines", pk_item.airlines)
+        self.assertIn("PK", pk_item.countries)
+
 
 class CollectorTests(unittest.TestCase):
-    def test_live_blog_and_index_urls_are_skipped(self):
+    def test_live_blog_and_index_urls_are_skipped_but_fr24_articles_kept(self):
         from src.collectors import RssCollector
 
         collector = RssCollector(load_config(), db=None)
@@ -266,11 +281,30 @@ class CollectorTests(unittest.TestCase):
             )
         )
         self.assertTrue(collector._should_skip("https://example.com/tag/iran/"))
+        self.assertTrue(collector._should_skip("https://ops.group/blog/"))
+        self.assertFalse(
+            collector._should_skip(
+                "https://www.flightradar24.com/blog/flight-tracking-news/iran-airspace-rerouting/"
+            )
+        )
+        self.assertFalse(
+            collector._should_skip(
+                "https://ops.group/blog/tehran-fir-airspace-risk-warning/"
+            )
+        )
         self.assertFalse(
             collector._should_skip(
                 "https://www.aa.com.tr/en/middle-east/iran-closes-airspace/4095206"
             )
         )
+
+    def test_build_jobs_skips_disabled_collectors(self):
+        from src.airlines import AirlineIndex
+        from src.collectors import build_jobs
+
+        config = load_config(dry_run=True)
+        jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
+        self.assertEqual([job.name for job in jobs], ["rss"])
 
 
 class HealthTests(unittest.TestCase):
@@ -292,8 +326,28 @@ class HealthTests(unittest.TestCase):
         time.sleep(0.02)
         self.assertFalse(state.healthy())
 
+    def test_touch_alone_cannot_mask_dead_collector_or_thread(self):
+        import time
+
+        from src.health import HealthState
+
+        state = HealthState(stale_seconds=60)
+        state.expect_poll("rss", 0.02)
+        time.sleep(0.03)
+        state.touch()  # حتی اگر حلقه‌ی اصلی زنده باشد، عقب‌افتادن کالکتور باید ناسالم شود
+        self.assertFalse(state.healthy())
+        self.assertTrue(any("poll-stale:rss" in r for r in state.snapshot()["reasons"]))
+
+        state.mark_poll("rss")
+        self.assertTrue(state.healthy())
+
+        state.add_check("telegram_listener", lambda: False)
+        state.touch()
+        self.assertFalse(state.healthy())
+
     def test_http_endpoint(self):
         import json
+        import urllib.error
         import urllib.request
 
         from src.health import HealthServer, HealthState
@@ -309,6 +363,12 @@ class HealthTests(unittest.TestCase):
                 payload = json.loads(response.read().decode())
                 self.assertEqual(response.status, 200)
                 self.assertEqual(payload["status"], "ok")
+
+            state.add_check("broken_worker", lambda: False)
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(f"http://127.0.0.1:{server.port}/healthz", timeout=5)
+            self.assertEqual(ctx.exception.code, 503)
+            ctx.exception.close()
         finally:
             server.stop()
 
@@ -399,6 +459,8 @@ class TranslatorTests(unittest.TestCase):
 
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
+        from src.formatter import format_publication_notice
+
         config = load_config()
         event = {
             "severity": "critical", "category": "airspace",
@@ -407,14 +469,168 @@ class FormatterTests(unittest.TestCase):
             "primary_source": "Anadolu Ajansı",
             "primary_url": "https://example.com/a",
             "first_seen": util.iso(util.now_utc()),
-            "airlines": "Turkish Airlines", "countries": "IR,TR",
+            "airlines": "Turkish Airlines", "countries": "IR,TR,PK,TH,VN",
         }
         text = format_event(event, config)
         self.assertIn("🔴", text)
         self.assertIn("Anadolu Ajansı", text)
         self.assertIn("✅", text)
+        self.assertIn("پاکستان", text)
+        self.assertIn("تایلند", text)
+        self.assertIn("ویتنام", text)
         self.assertIn("https://example.com/a", text)
         self.assertLess(len(text), 4096)
+
+        notice = format_publication_notice(event)
+        self.assertNotIn("##", notice)
+        self.assertIn("#هشدار", notice)
+
+
+class PipelineRecoveryTests(unittest.TestCase):
+    def test_unsent_event_is_queued_and_flushed_later(self):
+        import tempfile
+
+        from src.db import Database
+        from src.pipeline import Pipeline
+
+        config = load_config(dry_run=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            try:
+                class FlakyBot:
+                    configured = True
+
+                    def __init__(self):
+                        self.should_fail = True
+                        self._chat_id = "123456"
+
+                    def chat_id(self):
+                        return self._chat_id
+
+                    def feedback_keyboard(self, event_id, url=""):
+                        return []
+
+                    def send(self, text, **kwargs):
+                        if self.should_fail:
+                            raise RuntimeError("temporary network timeout")
+                        return 777
+
+                bot = FlakyBot()
+                pipeline = Pipeline(config, db, bot)
+                item = RawItem(
+                    source_id="ir_irna",
+                    source_name="IRNA",
+                    source_url="https://irna.ir/rss",
+                    title="لغو پروازها در فرودگاه مهرآباد تهران",
+                    body="پروازهای مهرآباد موقتاً متوقف شد.",
+                    url="https://irna.ir/news/1001",
+                    lang="fa",
+                    country="IR",
+                )
+                outcome = pipeline.process(item)
+                self.assertEqual(outcome, "queued")
+                self.assertEqual(len(db.unsent_events()), 1)
+
+                bot.should_fail = False
+                sent = pipeline.flush_unsent()
+                self.assertEqual(sent, 1)
+                self.assertEqual(len(db.unsent_events()), 0)
+            finally:
+                db.close()
+
+
+class KeepAliveTests(unittest.TestCase):
+    def _mock_session(self, deploy_replicas: int, pods: list[dict]):
+        class Resp:
+            def __init__(self, data):
+                self._data = data
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._data
+
+        class Session:
+            def __init__(self):
+                self.headers = {}
+                self.patches: list[tuple[str, dict]] = []
+
+            def get(self, url, **kwargs):
+                if url.endswith("/deployments/airwatch"):
+                    return Resp({"spec": {"replicas": deploy_replicas}})
+                return Resp({"items": pods})
+
+            def patch(self, url, json=None, **kwargs):
+                self.patches.append((url, json))
+                return Resp({})
+
+        return Session()
+
+    def test_scales_up_when_idled_to_zero(self):
+        from src.keepalive import KeepAliveClient
+
+        session = self._mock_session(deploy_replicas=0, pods=[])
+        client = KeepAliveClient("https://k8s.local", "tok", "demo-ns", verify=False, session=session)
+        action = client.ensure_awake()
+        self.assertEqual(action, "scaled-up")
+        self.assertEqual(session.patches[0][1], {"spec": {"replicas": 1}})
+
+    def test_recycles_pod_before_12h_sandbox_limit(self):
+        from datetime import timedelta
+
+        from src.keepalive import KeepAliveClient
+
+        now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
+        old_start = util.iso(now - timedelta(hours=11, minutes=5))
+        pods = [{
+            "metadata": {"name": "airwatch-abc"},
+            "status": {
+                "phase": "Running",
+                "startTime": old_start,
+                "containerStatuses": [{"restartCount": 0}],
+            },
+        }]
+        session = self._mock_session(deploy_replicas=1, pods=pods)
+        client = KeepAliveClient("https://k8s.local", "tok", "demo-ns", verify=False, session=session)
+        action = client.ensure_awake(now=now)
+        self.assertEqual(action, "restarted")
+        self.assertIn("restartedAt", str(session.patches[0][1]))
+
+    def test_leaves_healthy_young_pod_untouched(self):
+        from datetime import timedelta
+
+        from src.keepalive import KeepAliveClient
+
+        now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
+        fresh_start = util.iso(now - timedelta(hours=2))
+        pods = [{
+            "metadata": {"name": "airwatch-abc"},
+            "status": {
+                "phase": "Running",
+                "startTime": fresh_start,
+                "containerStatuses": [{"restartCount": 0}],
+            },
+        }]
+        session = self._mock_session(deploy_replicas=1, pods=pods)
+        client = KeepAliveClient("https://k8s.local", "tok", "demo-ns", verify=False, session=session)
+        self.assertEqual(client.ensure_awake(now=now), "healthy")
+        self.assertEqual(session.patches, [])
+
+
+class ManifestValidationTests(unittest.TestCase):
+    def test_openshift_manifests_are_valid_yaml(self):
+        import yaml
+
+        root = Path(__file__).resolve().parent.parent
+        app_docs = [d for d in yaml.safe_load_all((root / "deploy/app.yaml").read_text("utf-8")) if d]
+        kinds = [doc["kind"] for doc in app_docs]
+        self.assertEqual(
+            kinds,
+            ["Deployment", "ServiceAccount", "Role", "RoleBinding", "CronJob"],
+        )
+        build_docs = [d for d in yaml.safe_load_all((root / "deploy/build.yaml").read_text("utf-8")) if d]
+        self.assertEqual([doc["kind"] for doc in build_docs], ["ImageStream", "BuildConfig", "PersistentVolumeClaim"])
 
 
 if __name__ == "__main__":

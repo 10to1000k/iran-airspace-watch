@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 import queue
 import threading
-import calendar
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Callable
+from urllib.parse import urlparse
 
 import feedparser
 import requests
@@ -27,6 +29,9 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
+MAX_FEED_BYTES = 2 * 1024 * 1024  # سقف ۲ مگابایت برای جلوگیری از مصرف بی‌حد رم یا قفل شدن سوکت
+BARE_INDEX_PATHS = {"", "/", "/blog", "/news", "/feed", "/rss"}
+
 
 class RssCollector:
     def __init__(self, config, db):
@@ -34,33 +39,69 @@ class RssCollector:
         self.db = db
         self.max_age_hours = float(config.get("poll.max_item_age_hours", 12))
         self.per_feed = int(config.get("poll.max_items_per_feed", 15))
+        self.max_workers = max(1, int(config.get("poll.rss_workers", 6)))
         self.skip_url_parts = [
             part.lower() for part in (config.get("poll.skip_url_parts", []) or [])
         ]
 
-    def _should_skip(self, link: str) -> bool:
-        low = (link or "").lower()
-        return any(part in low for part in self.skip_url_parts)
+    def _should_skip(self, link: str, source_url: str = "") -> bool:
+        low = (link or "").strip().lower()
+        if not low:
+            return False
+        if source_url and low.rstrip("/") == source_url.strip().lower().rstrip("/"):
+            return True
+        if any(part in low for part in self.skip_url_parts):
+            return True
+        parsed = urlparse(low)
+        if parsed.path.rstrip("/") in BARE_INDEX_PATHS and not parsed.query:
+            return True
+        return False
 
     def poll(self) -> list[RawItem]:
+        sources = self.cfg.rss_sources
+        if not sources:
+            return []
+
         items: list[RawItem] = []
-        for source in self.cfg.rss_sources:
-            try:
-                items.extend(self._fetch(source))
-                self.db.mark_source_ok(source["id"])
-            except Exception as exc:  # noqa: BLE001
-                log.warning("فید %s خوانده نشد: %s", source.get("id"), exc)
-                self.db.mark_source_error(source["id"], str(exc))
+        workers = min(self.max_workers, len(sources))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rss-worker") as pool:
+            future_map = {pool.submit(self._fetch, source): source for source in sources}
+            for future in as_completed(future_map):
+                source = future_map[future]
+                try:
+                    fetched = future.result()
+                    items.extend(fetched)
+                    if self.db:
+                        self.db.mark_source_ok(source["id"])
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("فید %s خوانده نشد: %s", source.get("id"), exc)
+                    if self.db:
+                        self.db.mark_source_error(source["id"], str(exc))
         return items
 
+    def _read_bounded(self, url: str, timeout: tuple[float, float] = (8.0, 18.0)) -> bytes:
+        with requests.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            },
+            timeout=timeout,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            buf = bytearray()
+            for chunk in response.iter_content(chunk_size=32768):
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                if len(buf) >= MAX_FEED_BYTES:
+                    break
+            return bytes(buf)
+
     def _fetch(self, source: dict) -> list[RawItem]:
-        response = requests.get(
-            source["url"],
-            headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
-            timeout=25,
-        )
-        response.raise_for_status()
-        parsed = feedparser.parse(response.content)
+        raw_bytes = self._read_bounded(source["url"])
+        parsed = feedparser.parse(raw_bytes)
         cutoff = util.now_utc() - timedelta(hours=self.max_age_hours)
 
         out: list[RawItem] = []
@@ -70,9 +111,10 @@ class RssCollector:
                 continue
             title = util.strip_html(entry.get("title", "")).strip()
             body = _entry_body(entry)
-            link = entry.get("link", "") or source["url"]
-            if self._should_skip(link):
+            raw_link = (entry.get("link") or "").strip()
+            if raw_link and self._should_skip(raw_link, source["url"]):
                 continue
+            link = raw_link or source["url"]
             if not title and not body:
                 continue
             out.append(
@@ -306,17 +348,20 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     x = XCollector(config, airline_index)
 
     jobs = [CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll)]
-    # NOTAM فقط اگر صریحاً روشن شده باشد؛ پیش‌فرض خاموش است (نیاز به کلید FAA ندارد).
+    # فقط کالکتورهایی که واقعاً فعال‌اند زمان‌بندی می‌شوند تا نخ بیکار نسازند
+    # و سلامت‌سنج بتواند مرگ کالکتورهای واقعی را تشخیص دهد.
     if config.get("notam.enabled", False):
         jobs.append(CollectorJob("notam", int(config.get("poll.notam_seconds", 60)), notam.poll))
-    jobs.append(
-        CollectorJob(
-            "telegram",
-            int(config.get("poll.telegram_queue_seconds", 10)),
-            telegram.poll,
+    if telegram.enabled:
+        jobs.append(
+            CollectorJob(
+                "telegram",
+                int(config.get("poll.telegram_queue_seconds", 10)),
+                telegram.poll,
+            )
         )
-    )
-    jobs.append(CollectorJob("x", int(config.get("poll.x_seconds", 90)), x.poll))
+    if x.enabled:
+        jobs.append(CollectorJob("x", int(config.get("poll.x_seconds", 90)), x.poll))
     return jobs
 
 

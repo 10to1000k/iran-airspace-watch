@@ -135,6 +135,15 @@ class Database:
             except sqlite3.IntegrityError:
                 return False
 
+    def delete_item(self, source_id: str, fp: str) -> None:
+        """حذف آیتم در صورتی که پردازش آن قبل از ساخت رخداد با خطا متوقف شده باشد."""
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM items WHERE source_id=? AND fingerprint=? AND event_id IS NULL",
+                (source_id, fp),
+            )
+            self.conn.commit()
+
     # ── events ───────────────────────────────────────────────
     def recent_events(self, hours: float) -> list[sqlite3.Row]:
         since = util.hours_ago_iso(hours)
@@ -142,6 +151,27 @@ class Database:
             return self.conn.execute(
                 "SELECT * FROM events WHERE first_seen >= ? ORDER BY first_seen DESC",
                 (since,),
+            ).fetchall()
+
+    def latest_events(self, limit: int = 5) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM events ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+
+    def unsent_events(self, hours: float = 6.0, limit: int = 5) -> list[sqlite3.Row]:
+        """رخدادهای تازه‌ای که به دلیل خطای موقت تلگرام یا نبود گیرنده هنوز ارسال نشده‌اند."""
+        since = util.hours_ago_iso(hours)
+        with self._lock:
+            return self.conn.execute(
+                """SELECT * FROM events
+                   WHERE root_message_id IS NULL
+                     AND corrected = 0
+                     AND first_seen >= ?
+                   ORDER BY id ASC
+                   LIMIT ?""",
+                (since, int(limit)),
             ).fetchall()
 
     def get_event(self, event_id: int) -> sqlite3.Row | None:
@@ -281,6 +311,43 @@ class Database:
                 (source_id, error[:400]),
             )
             self.conn.commit()
+
+    def sources_health_summary(self) -> dict:
+        with self._lock:
+            ok = self.conn.execute(
+                "SELECT COUNT(*) c FROM sources_health WHERE error_count = 0"
+            ).fetchone()["c"]
+            failing = self.conn.execute(
+                "SELECT source_id, error_count FROM sources_health "
+                "WHERE error_count > 0 ORDER BY error_count DESC"
+            ).fetchall()
+        return {
+            "ok": ok,
+            "failing": [(row["source_id"], row["error_count"]) for row in failing],
+        }
+
+    # ── نگه‌داری و پاک‌سازی دوره‌ای ─────────────────────────
+    def prune(self, keep_days: int = 30, max_cache_entries: int = 2000) -> int:
+        """حذف آیتم‌های قدیمی برای جلوگیری از رشد بی‌وقفه‌ی دیسک."""
+        cutoff = util.hours_ago_iso(keep_days * 24)
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM items WHERE collected_at < ? AND event_id IS NULL",
+                (cutoff,),
+            )
+            deleted = cur.rowcount
+            tr_count = self.conn.execute(
+                "SELECT COUNT(*) c FROM kv WHERE key LIKE 'tr:%'"
+            ).fetchone()["c"]
+            if tr_count > max_cache_entries:
+                excess = tr_count - max_cache_entries
+                self.conn.execute(
+                    "DELETE FROM kv WHERE rowid IN "
+                    "(SELECT rowid FROM kv WHERE key LIKE 'tr:%' ORDER BY rowid ASC LIMIT ?)",
+                    (excess,),
+                )
+            self.conn.commit()
+        return deleted
 
     def stats(self) -> dict:
         with self._lock:

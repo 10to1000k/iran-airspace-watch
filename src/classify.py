@@ -94,9 +94,12 @@ class Classifier:
     # ── اصلی ─────────────────────────────────────────────────
     def classify(self, item: RawItem) -> Classification:
         # سقف طول متن: صفحه‌های بلند به‌طور تصادفی کلیدواژه‌های ایران و هوانوردی را کنار هم دارند
-        text = util.normalize(item.text)[: self._max_match_chars]
+        raw_text = (item.text or "")[: self._max_match_chars]
+        text = util.normalize(raw_text)
         airports = self._airports_in(text)
-        airlines = self.airlines.match(text)
+        # مهم: متن اصلی (قبل از lowercase شدن) به AirlineIndex داده می‌شود تا کدهای ۳حرفی
+        # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
+        airlines = self.airlines.match(raw_text)
 
         if not self._is_relevant(text, airports, airlines):
             return Classification(relevant=False, matched=[])
@@ -123,9 +126,18 @@ class Classifier:
             countries.add(item.country)
         country_map = {
             "TR": ["ترکیه", "turkey", "türkiye", "турция"],
-            "AE": ["امارات", "uae", "emirates", "оаэ", "الإمارات"],
-            "RU": ["روسیه", "russia", "россия", "روس"],
-            "CN": ["چین", "china", "китай", "中国"],
+            "AE": ["امارات", "uae", "emirates", "dubai", "دبی", "оаэ", "الإمارات"],
+            "RU": ["روسیه", "russia", "moscow", "مسکو", "россия", "روس"],
+            "CN": ["چین", "china", "beijing", "guangzhou", "پکن", "گوانگژو", "китай", "中国"],
+            "PK": ["پاکستان", "pakistan", "karachi", "lahore"],
+            "TH": ["تایلند", "thailand", "bangkok", "phuket", "بانکوک", "پوکت"],
+            "VN": ["ویتنام", "vietnam", "hanoi"],
+            "IQ": ["عراق", "iraq", "najaf", "baghdad", "نجف", "بغداد"],
+            "AF": ["افغانستان", "afghanistan", "kabul", "کابل"],
+            "QA": ["قطر", "qatar", "doha", "دوحه"],
+            "OM": ["عمان", "oman", "muscat", "مسقط"],
+            "AZ": ["آذربایجان", "azerbaijan", "baku", "باکو"],
+            "GE": ["گرجستان", "georgia", "tbilisi", "تفلیس"],
         }
         for code, words in country_map.items():
             if any(_contains(text, w) for w in words):

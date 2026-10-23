@@ -1,7 +1,9 @@
-"""سرور سلامت سبک برای probeهای OpenShift/Kubernetes.
+"""سرور سلامت واقعی برای probeهای OpenShift/Kubernetes.
 
 بدون وابستگی خارجی، روی http.server استاندارد.
-هدف: اگر حلقه‌ی اصلی کد hang کرد، k8s خودش pod را ری‌استارت کند.
+علاوه بر ضربان حلقه‌ی اصلی، زنده‌بودن نخ‌های حیاتی (کالکتور RSS و شنونده‌ی تلگرام)
+و عقب نیفتادن واقعی پایش‌ها را بررسی می‌کند تا در صورت قفل‌شدن هر بخش،
+OpenShift خودکار کانتینر را ری‌استارت کند.
 """
 
 from __future__ import annotations
@@ -10,19 +12,33 @@ import json
 import logging
 import threading
 import time
+from typing import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 log = logging.getLogger(__name__)
 
 
 class HealthState:
-    def __init__(self, stale_seconds: int = 120):
+    def __init__(self, stale_seconds: int = 300):
         self.stale_seconds = stale_seconds
         self.started = time.time()
         self._last_touch = time.monotonic()
         self._polls: dict[str, float] = {}
+        self._poll_mono: dict[str, float] = {}
+        self._max_silence: dict[str, float] = {}
+        self._checks: dict[str, Callable[[], bool]] = {}
         self._published = 0
         self._lock = threading.Lock()
+
+    # ── ثبت سرویس‌های حیاتی ───────────────────────────────────
+    def expect_poll(self, name: str, max_silence_seconds: float) -> None:
+        with self._lock:
+            self._max_silence[name] = float(max_silence_seconds)
+            self._poll_mono.setdefault(name, time.monotonic())
+
+    def add_check(self, name: str, check: Callable[[], bool]) -> None:
+        with self._lock:
+            self._checks[name] = check
 
     # ── به‌روزرسانی ──────────────────────────────────────────
     def touch(self) -> None:
@@ -30,9 +46,12 @@ class HealthState:
             self._last_touch = time.monotonic()
 
     def mark_poll(self, name: str) -> None:
+        now_mono = time.monotonic()
+        now_wall = time.time()
         with self._lock:
-            self._last_touch = time.monotonic()
-            self._polls[name] = time.time()
+            self._last_touch = now_mono
+            self._poll_mono[name] = now_mono
+            self._polls[name] = now_wall
 
     def mark_publish(self) -> None:
         with self._lock:
@@ -41,24 +60,57 @@ class HealthState:
 
     # ── وضعیت ────────────────────────────────────────────────
     def age(self) -> float:
-        return time.monotonic() - self._last_touch
+        with self._lock:
+            return time.monotonic() - self._last_touch
+
+    def _evaluate(self) -> tuple[bool, list[str], float, dict[str, float]]:
+        now_mono = time.monotonic()
+        with self._lock:
+            age = now_mono - self._last_touch
+            polls_copy = dict(self._polls)
+            poll_mono = dict(self._poll_mono)
+            max_silence = dict(self._max_silence)
+            checks = dict(self._checks)
+
+        reasons: list[str] = []
+        if age >= self.stale_seconds:
+            reasons.append(f"main-loop-stale:{round(age, 1)}s")
+
+        for name, limit in max_silence.items():
+            since = now_mono - poll_mono.get(name, now_mono)
+            if since >= limit:
+                reasons.append(f"poll-stale:{name}:{round(since, 1)}s")
+
+        for name, check in checks.items():
+            try:
+                ok = bool(check())
+            except Exception:  # noqa: BLE001
+                ok = False
+            if not ok:
+                reasons.append(f"check-failed:{name}")
+
+        return (len(reasons) == 0), reasons, age, polls_copy
 
     def healthy(self) -> bool:
-        return self.age() < self.stale_seconds
+        ok, _, _, _ = self._evaluate()
+        return ok
 
     def snapshot(self) -> dict:
+        ok, reasons, age, polls_copy = self._evaluate()
         with self._lock:
-            age = time.monotonic() - self._last_touch
-            return {
-                "status": "ok" if age < self.stale_seconds else "stale",
-                "uptime_seconds": round(time.time() - self.started),
-                "seconds_since_heartbeat": round(age, 1),
-                "published": self._published,
-                "last_poll_utc": {
-                    name: time.strftime("%H:%M:%S", time.gmtime(value))
-                    for name, value in self._polls.items()
-                },
-            }
+            published = self._published
+        return {
+            "status": "ok" if ok else "stale",
+            "reasons": reasons,
+            "uptime_seconds": round(time.time() - self.started),
+            "seconds_since_heartbeat": round(age, 1),
+            "published": published,
+            "last_poll_utc": {
+                name: time.strftime("%H:%M:%S", time.gmtime(value))
+                for name, value in polls_copy.items()
+            },
+            "last_poll_epoch": polls_copy,
+        }
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -70,8 +122,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        healthy = self.state.healthy()
-        body = json.dumps(self.state.snapshot(), ensure_ascii=False).encode("utf-8")
+        snap = self.state.snapshot()
+        healthy = snap["status"] == "ok"
+        body = json.dumps(snap, ensure_ascii=False).encode("utf-8")
         self.send_response(200 if healthy else 503)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
