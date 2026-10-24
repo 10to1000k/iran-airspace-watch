@@ -55,7 +55,9 @@ class UtilTests(unittest.TestCase):
         self.assertEqual(util.normalize("ايران"), util.normalize("ایران"))
 
     def test_numbers_preserved(self):
-        self.assertTrue(util.numbers_preserved("باند ۲۹L از 09:10", "باند 29L از 09:10"))
+        self.assertTrue(
+            util.numbers_preserved("باند ۲۹L از 09:10", "باند 29L از 09:10")
+        )
         self.assertFalse(util.numbers_preserved("باند 29L", "باند 92L"))
 
     def test_jalali(self):
@@ -71,8 +73,14 @@ class ClassifierTests(unittest.TestCase):
 
     def item(self, title: str, body: str = "", lang: str = "en", country: str = "INTL"):
         return RawItem(
-            source_id="t", source_name="test", source_url="", title=title,
-            body=body, url="", lang=lang, country=country,
+            source_id="t",
+            source_name="test",
+            source_url="",
+            title=title,
+            body=body,
+            url="",
+            lang=lang,
+            country=country,
         )
 
     def test_relevant_airspace(self):
@@ -92,11 +100,40 @@ class ClassifierTests(unittest.TestCase):
         self.assertIn("TR", result.countries)
 
     def test_irrelevant(self):
-        result = self.classifier.classify(self.item("Weather forecast for Brazil", "rain expected"))
+        result = self.classifier.classify(
+            self.item("Weather forecast for Brazil", "rain expected")
+        )
         self.assertFalse(result.relevant)
 
     def test_airport_code_not_matched_inside_words(self):
         result = self.classifier.classify(self.item("Walking through the park"))
+        self.assertFalse(result.relevant)
+
+    def test_airport_code_does_not_match_a_person_name(self):
+        """مثبت کاذب واقعی: «Ika Kartika» با کد فرودگاه IKA قاطی شد."""
+        result = self.classifier.classify(
+            self.item(
+                "Big dreams, growing pains in Indonesia: Prabowo's turbulent 2 years",
+                "Bekasi resident Ika Kartika voted in Indonesia's 2024 election "
+                "and hoped for a more stable economy.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_uppercase_airport_code_still_matches(self):
+        result = self.classifier.classify(
+            self.item("Flights resume at IKA after runway repairs", "")
+        )
+        self.assertTrue(result.relevant)
+
+    def test_persian_suffix_does_not_match_an_airline(self):
+        """«ماهانه» (monthly) نباید «ماهان» (Mahan Air) شمرده شود."""
+        result = self.classifier.classify(
+            self.item(
+                "تولید ماهانه ۷ تن نان سبوس‌دار در حرم شاهچراغ(ع)",
+                "این کارگاه ماهانه هفت تن نان تولید می‌کند.",
+            )
+        )
         self.assertFalse(result.relevant)
 
     def test_sports_flight_word_is_not_relevant(self):
@@ -223,7 +260,9 @@ class ClassifierTests(unittest.TestCase):
 
     def test_conflict_context_is_off_by_default(self):
         result = self.classifier.classify(
-            self.item("Iran warns of stronger response to any new attack", "military drills")
+            self.item(
+                "Iran warns of stronger response to any new attack", "military drills"
+            )
         )
         self.assertFalse(result.relevant)
 
@@ -242,7 +281,9 @@ class ClassifierTests(unittest.TestCase):
         )
         classifier = Classifier(cfg)
         result = classifier.classify(
-            self.item("Iran warns of stronger response to any new attack", "military drills")
+            self.item(
+                "Iran warns of stronger response to any new attack", "military drills"
+            )
         )
         self.assertTrue(result.relevant)
         self.assertEqual(result.category, "context")
@@ -263,7 +304,9 @@ class ClassifierTests(unittest.TestCase):
         self.assertIn("Turkish Airlines", tr_item.airlines)
 
         pk_item = self.classifier.classify(
-            self.item("PIA suspends flights to Iran over airspace warning", "", country="PK")
+            self.item(
+                "PIA suspends flights to Iran over airspace warning", "", country="PK"
+            )
         )
         self.assertTrue(pk_item.relevant)
         self.assertIn("Pakistan International Airlines", pk_item.airlines)
@@ -366,7 +409,9 @@ class HealthTests(unittest.TestCase):
 
             state.add_check("broken_worker", lambda: False)
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(f"http://127.0.0.1:{server.port}/healthz", timeout=5)
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{server.port}/healthz", timeout=5
+                )
             self.assertEqual(ctx.exception.code, 503)
             ctx.exception.close()
         finally:
@@ -406,7 +451,9 @@ class TranslatorTests(unittest.TestCase):
             calls.append(json["model"])
             if json["model"] == "busy-model":
                 return FakeResponse(503)
-            return FakeResponse(200, {"choices": [{"message": {"content": "تیتر\n---\nمتن"}}]})
+            return FakeResponse(
+                200, {"choices": [{"message": {"content": "تیتر\n---\nمتن"}}]}
+            )
 
         with mock.patch("src.translator.requests.post", side_effect=fake_post):
             output = translator._chat("hello", "system")
@@ -463,13 +510,17 @@ class FormatterTests(unittest.TestCase):
 
         config = load_config()
         event = {
-            "severity": "critical", "category": "airspace",
-            "title_fa": "بستن حریم هوایی", "body_fa": "متن خبر",
-            "confidence": "multi", "numbers_ok": 1,
+            "severity": "critical",
+            "category": "airspace",
+            "title_fa": "بستن حریم هوایی",
+            "body_fa": "متن خبر",
+            "confidence": "multi",
+            "numbers_ok": 1,
             "primary_source": "Anadolu Ajansı",
             "primary_url": "https://example.com/a",
             "first_seen": util.iso(util.now_utc()),
-            "airlines": "Turkish Airlines", "countries": "IR,TR,PK,TH,VN",
+            "airlines": "Turkish Airlines",
+            "countries": "IR,TR,PK,TH,VN",
         }
         text = format_event(event, config)
         self.assertIn("🔴", text)
@@ -497,6 +548,7 @@ class PipelineRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "test.db")
             try:
+
                 class FlakyBot:
                     configured = True
 
@@ -571,7 +623,9 @@ class KeepAliveTests(unittest.TestCase):
         from src.keepalive import KeepAliveClient
 
         session = self._mock_session(deploy_replicas=0, pods=[])
-        client = KeepAliveClient("https://k8s.local", "tok", "demo-ns", verify=False, session=session)
+        client = KeepAliveClient(
+            "https://k8s.local", "tok", "demo-ns", verify=False, session=session
+        )
         action = client.ensure_awake()
         self.assertEqual(action, "scaled-up")
         self.assertEqual(session.patches[0][1], {"spec": {"replicas": 1}})
@@ -583,16 +637,20 @@ class KeepAliveTests(unittest.TestCase):
 
         now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
         old_start = util.iso(now - timedelta(hours=11, minutes=5))
-        pods = [{
-            "metadata": {"name": "airwatch-abc"},
-            "status": {
-                "phase": "Running",
-                "startTime": old_start,
-                "containerStatuses": [{"restartCount": 0}],
-            },
-        }]
+        pods = [
+            {
+                "metadata": {"name": "airwatch-abc"},
+                "status": {
+                    "phase": "Running",
+                    "startTime": old_start,
+                    "containerStatuses": [{"restartCount": 0}],
+                },
+            }
+        ]
         session = self._mock_session(deploy_replicas=1, pods=pods)
-        client = KeepAliveClient("https://k8s.local", "tok", "demo-ns", verify=False, session=session)
+        client = KeepAliveClient(
+            "https://k8s.local", "tok", "demo-ns", verify=False, session=session
+        )
         action = client.ensure_awake(now=now)
         self.assertEqual(action, "restarted")
         self.assertIn("restartedAt", str(session.patches[0][1]))
@@ -604,16 +662,20 @@ class KeepAliveTests(unittest.TestCase):
 
         now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
         fresh_start = util.iso(now - timedelta(hours=2))
-        pods = [{
-            "metadata": {"name": "airwatch-abc"},
-            "status": {
-                "phase": "Running",
-                "startTime": fresh_start,
-                "containerStatuses": [{"restartCount": 0}],
-            },
-        }]
+        pods = [
+            {
+                "metadata": {"name": "airwatch-abc"},
+                "status": {
+                    "phase": "Running",
+                    "startTime": fresh_start,
+                    "containerStatuses": [{"restartCount": 0}],
+                },
+            }
+        ]
         session = self._mock_session(deploy_replicas=1, pods=pods)
-        client = KeepAliveClient("https://k8s.local", "tok", "demo-ns", verify=False, session=session)
+        client = KeepAliveClient(
+            "https://k8s.local", "tok", "demo-ns", verify=False, session=session
+        )
         self.assertEqual(client.ensure_awake(now=now), "healthy")
         self.assertEqual(session.patches, [])
 
@@ -623,14 +685,25 @@ class ManifestValidationTests(unittest.TestCase):
         import yaml
 
         root = Path(__file__).resolve().parent.parent
-        app_docs = [d for d in yaml.safe_load_all((root / "deploy/app.yaml").read_text("utf-8")) if d]
+        app_docs = [
+            d
+            for d in yaml.safe_load_all((root / "deploy/app.yaml").read_text("utf-8"))
+            if d
+        ]
         kinds = [doc["kind"] for doc in app_docs]
         self.assertEqual(
             kinds,
             ["Deployment", "ServiceAccount", "Role", "RoleBinding", "CronJob"],
         )
-        build_docs = [d for d in yaml.safe_load_all((root / "deploy/build.yaml").read_text("utf-8")) if d]
-        self.assertEqual([doc["kind"] for doc in build_docs], ["ImageStream", "BuildConfig", "PersistentVolumeClaim"])
+        build_docs = [
+            d
+            for d in yaml.safe_load_all((root / "deploy/build.yaml").read_text("utf-8"))
+            if d
+        ]
+        self.assertEqual(
+            [doc["kind"] for doc in build_docs],
+            ["ImageStream", "BuildConfig", "PersistentVolumeClaim"],
+        )
 
 
 if __name__ == "__main__":

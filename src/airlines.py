@@ -42,7 +42,15 @@ class AirlineIndex:
                     self._codes[code.upper()] = canonical
 
         # طولانی‌ترها اول، تا «Turkish Airlines» قبل از «Turkish» بررسی شود
-        self._ordered = sorted(self._names.items(), key=lambda kv: len(kv[0]), reverse=True)
+        self._ordered = sorted(
+            self._names.items(), key=lambda kv: len(kv[0]), reverse=True
+        )
+        # مرز واژه لازم است: «ماهان» نباید داخل «ماهانه» پیدا شود
+        # (خبر «تولید ماهانه نان» به‌عنوان خبر ماهان ایر منتشر شد).
+        self._patterns = {
+            alias: re.compile(rf"(?<!\w){re.escape(alias)}(?!\w)")
+            for alias in self._names
+        }
 
     def match(self, text: str) -> list[str]:
         if not text:
@@ -53,7 +61,7 @@ class AirlineIndex:
         for alias, canonical in self._ordered:
             if canonical in found:
                 continue
-            if alias in norm:
+            if self._patterns[alias].search(norm):
                 found.append(canonical)
 
         for code in set(_UPPER_CODE.findall(text)):

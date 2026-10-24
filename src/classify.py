@@ -28,20 +28,33 @@ class Classifier:
         self.airlines = AirlineIndex(config.airlines)
 
         self._relevance: list[str] = []
-        for words in (self.settings.get("relevance", {}).get("keywords") or {}).values():
+        for words in (
+            self.settings.get("relevance", {}).get("keywords") or {}
+        ).values():
             self._relevance.extend(words or [])
-        self._aviation = self.settings.get("relevance", {}).get("aviation_keywords") or []
-        self._strong = self.settings.get("relevance", {}).get("strong_aviation_keywords") or []
+        self._aviation = (
+            self.settings.get("relevance", {}).get("aviation_keywords") or []
+        )
+        self._strong = (
+            self.settings.get("relevance", {}).get("strong_aviation_keywords") or []
+        )
         self._region = self.settings.get("relevance", {}).get("region_keywords") or []
         # قانون منطقه فقط با سیگنال‌های واقعی حریم هوایی فعال می‌شود، نه با «airline».
         self._airspace_signal = (
-            self.settings.get("relevance", {}).get("airspace_signal_keywords") or self._strong
+            self.settings.get("relevance", {}).get("airspace_signal_keywords")
+            or self._strong
         )
         self._include_conflict = bool(
-            self.settings.get("relevance", {}).get("include_iran_conflict_context", False)
+            self.settings.get("relevance", {}).get(
+                "include_iran_conflict_context", False
+            )
         )
-        self._conflict = self.settings.get("relevance", {}).get("conflict_keywords") or []
-        self._airport_codes = self.settings.get("relevance", {}).get("airport_codes") or []
+        self._conflict = (
+            self.settings.get("relevance", {}).get("conflict_keywords") or []
+        )
+        self._airport_codes = (
+            self.settings.get("relevance", {}).get("airport_codes") or []
+        )
 
         self._categories: dict[str, list[str]] = {}
         self._base_severity: dict[str, str] = {}
@@ -50,17 +63,24 @@ class Classifier:
             self._base_severity[name] = spec.get("severity", "context")
 
         self._critical = self.settings.get("severity", {}).get("critical") or []
-        self._max_match_chars = int(self.settings.get("relevance", {}).get("max_match_chars", 1200))
+        self._max_match_chars = int(
+            self.settings.get("relevance", {}).get("max_match_chars", 1200)
+        )
 
     # ── کمکی ─────────────────────────────────────────────────
     @staticmethod
     def _hit(text: str, keywords: list[str]) -> bool:
         return any(_contains(text, kw) for kw in keywords)
 
-    def _airports_in(self, text: str) -> list[str]:
+    def _airports_in(self, raw_text: str) -> list[str]:
+        """کدهای فرودگاه فقط با حروف بزرگ شمرده می‌شوند.
+
+        نسخه‌ی قبلی متن را lowercase می‌کرد و «IKA» با اسم «Ika Kartika»
+        قاطی شد؛ نتیجه‌اش انتشار یک خبر اندونزی بود.
+        """
         found = []
         for code in self._airport_codes:
-            if _contains(text, code):
+            if re.search(rf"\b{re.escape(code.upper())}\b", raw_text):
                 found.append(code.upper())
         return found
 
@@ -76,7 +96,11 @@ class Classifier:
         # لزوماً کلمه‌ی ایران را در متن ندارد.
         if any(self.airlines.is_iranian(name) for name in airlines):
             return True
-        if airlines and self._hit(text, self._region) and self._hit(text, self._airspace_signal):
+        if (
+            airlines
+            and self._hit(text, self._region)
+            and self._hit(text, self._airspace_signal)
+        ):
             # مثل «Emirates suspends flights across Middle East airspace»
             return True
         if not self._hit(text, self._relevance):
@@ -96,7 +120,7 @@ class Classifier:
         # سقف طول متن: صفحه‌های بلند به‌طور تصادفی کلیدواژه‌های ایران و هوانوردی را کنار هم دارند
         raw_text = (item.text or "")[: self._max_match_chars]
         text = util.normalize(raw_text)
-        airports = self._airports_in(text)
+        airports = self._airports_in(raw_text)
         # مهم: متن اصلی (قبل از lowercase شدن) به AirlineIndex داده می‌شود تا کدهای ۳حرفی
         # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
         airlines = self.airlines.match(raw_text)
@@ -108,7 +132,9 @@ class Classifier:
             name: sum(1 for kw in words if _contains(text, kw))
             for name, words in self._categories.items()
         }
-        best = max(scores, key=lambda name: (scores[name], -_CATEGORY_PRIORITY.index(name)))
+        best = max(
+            scores, key=lambda name: (scores[name], -_CATEGORY_PRIORITY.index(name))
+        )
         category = best if scores[best] > 0 else "context"
 
         matched = [kw for kw in self._critical if _contains(text, kw)]
@@ -128,7 +154,16 @@ class Classifier:
             "TR": ["ترکیه", "turkey", "türkiye", "турция"],
             "AE": ["امارات", "uae", "emirates", "dubai", "دبی", "оаэ", "الإمارات"],
             "RU": ["روسیه", "russia", "moscow", "مسکو", "россия", "روس"],
-            "CN": ["چین", "china", "beijing", "guangzhou", "پکن", "گوانگژو", "китай", "中国"],
+            "CN": [
+                "چین",
+                "china",
+                "beijing",
+                "guangzhou",
+                "پکن",
+                "گوانگژو",
+                "китай",
+                "中国",
+            ],
             "PK": ["پاکستان", "pakistan", "karachi", "lahore"],
             "TH": ["تایلند", "thailand", "bangkok", "phuket", "بانکوک", "پوکت"],
             "VN": ["ویتنام", "vietnam", "hanoi"],
