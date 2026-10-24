@@ -29,7 +29,9 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-MAX_FEED_BYTES = 2 * 1024 * 1024  # سقف ۲ مگابایت برای جلوگیری از مصرف بی‌حد رم یا قفل شدن سوکت
+MAX_FEED_BYTES = (
+    2 * 1024 * 1024
+)  # سقف ۲ مگابایت برای جلوگیری از مصرف بی‌حد رم یا قفل شدن سوکت
 BARE_INDEX_PATHS = {"", "/", "/blog", "/news", "/feed", "/rss"}
 
 
@@ -64,8 +66,12 @@ class RssCollector:
 
         items: list[RawItem] = []
         workers = min(self.max_workers, len(sources))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rss-worker") as pool:
-            future_map = {pool.submit(self._fetch, source): source for source in sources}
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="rss-worker"
+        ) as pool:
+            future_map = {
+                pool.submit(self._fetch, source): source for source in sources
+            }
             for future in as_completed(future_map):
                 source = future_map[future]
                 try:
@@ -79,7 +85,9 @@ class RssCollector:
                         self.db.mark_source_error(source["id"], str(exc))
         return items
 
-    def _read_bounded(self, url: str, timeout: tuple[float, float] = (8.0, 18.0)) -> bytes:
+    def _read_bounded(
+        self, url: str, timeout: tuple[float, float] = (8.0, 18.0)
+    ) -> bytes:
         with requests.get(
             url,
             headers={
@@ -163,7 +171,9 @@ class TelegramChannelCollector:
         self.cfg = config
         self.queue: queue.Queue[RawItem] = queue.Queue()
         self._thread: threading.Thread | None = None
-        self.enabled = _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS") and bool(config.telegram_channels)
+        self.enabled = _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS") and bool(
+            config.telegram_channels
+        )
 
     def start(self) -> None:
         if not self.enabled:
@@ -174,7 +184,9 @@ class TelegramChannelCollector:
             log.warning("telethon نصب نیست — کالکتور تلگرام غیرفعال شد")
             self.enabled = False
             return
-        self._thread = threading.Thread(target=self._run, name="telegram-collector", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="telegram-collector", daemon=True
+        )
         self._thread.start()
 
     def _run(self) -> None:
@@ -188,7 +200,9 @@ class TelegramChannelCollector:
 
         api_id = int(self.cfg.env_get("TELEGRAM_API_ID", "0") or 0)
         api_hash = self.cfg.env_get("TELEGRAM_API_HASH", "") or ""
-        session = self.cfg.env_get("TELEGRAM_SESSION", "data/telegram") or "data/telegram"
+        session = (
+            self.cfg.env_get("TELEGRAM_SESSION", "data/telegram") or "data/telegram"
+        )
         if not api_id or not api_hash:
             log.warning("TELEGRAM_API_ID/HASH تنظیم نشده — کالکتور تلگرام غیرفعال")
             return
@@ -222,7 +236,9 @@ class TelegramChannelCollector:
                     lang="fa",
                     country="INTL",
                     kind="telegram",
-                    published_at=message.date.astimezone(timezone.utc) if message.date else util.now_utc(),
+                    published_at=message.date.astimezone(timezone.utc)
+                    if message.date
+                    else util.now_utc(),
                     extra={"tier": 1},
                 )
             )
@@ -251,22 +267,25 @@ class XCollector:
         self.cfg = config
         self.airlines = airline_index
         self.enabled = _flag_direct(config, "ENABLE_X")
-        self.accounts = [a for a in (config.env_get("X_ACCOUNTS", "") or "").split(",") if a]
+        self.accounts = [
+            a for a in (config.env_get("X_ACCOUNTS", "") or "").split(",") if a
+        ]
         self._api = None
 
     def queries(self) -> list[str]:
         watch = [
-            a for a in self.cfg.airlines
-            if a.get("country") in {"TR", "AE", "RU", "CN"}
+            a for a in self.cfg.airlines if a.get("country") in {"TR", "AE", "RU", "CN"}
         ][: int(self.cfg.get("poll.x_max_queries", 5))]
         out = []
         for airline in watch:
             name = airline["name"]
             out.append(
                 f'("{name}" OR "{airline.get("iata", "")}") '
-                '(Iran OR Tehran OR IKA OR THR OR OIIX OR airspace) -filter:replies'
+                "(Iran OR Tehran OR IKA OR THR OR OIIX OR airspace) -filter:replies"
             )
-        out.append('(OIIE OR OIII OR OIIX OR "Tehran FIR") (closed OR NOTAM OR airspace) -filter:replies')
+        out.append(
+            '(OIIE OR OIII OR OIIX OR "Tehran FIR") (closed OR NOTAM OR airspace) -filter:replies'
+        )
         return out
 
     def poll(self) -> list[RawItem]:
@@ -290,7 +309,9 @@ class XCollector:
                 parts = line.split(":")
                 if len(parts) >= 4:
                     try:
-                        await api.pool.add_account(parts[0], parts[1], parts[2], ":".join(parts[3:]))
+                        await api.pool.add_account(
+                            parts[0], parts[1], parts[2], ":".join(parts[3:])
+                        )
                     except Exception as exc:  # noqa: BLE001
                         log.debug("افزودن اکانت X ناموفق: %s", exc)
             await api.pool.login_all()
@@ -322,7 +343,11 @@ class XCollector:
                         country="INTL",
                         kind="x",
                         published_at=when,
-                        extra={"tier": 1, "likes": tweet.likeCount, "reposts": tweet.retweetCount},
+                        extra={
+                            "tier": 1,
+                            "likes": tweet.likeCount,
+                            "reposts": tweet.retweetCount,
+                        },
                     )
                 )
         return out
@@ -351,7 +376,9 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     # فقط کالکتورهایی که واقعاً فعال‌اند زمان‌بندی می‌شوند تا نخ بیکار نسازند
     # و سلامت‌سنج بتواند مرگ کالکتورهای واقعی را تشخیص دهد.
     if config.get("notam.enabled", False):
-        jobs.append(CollectorJob("notam", int(config.get("poll.notam_seconds", 60)), notam.poll))
+        jobs.append(
+            CollectorJob("notam", int(config.get("poll.notam_seconds", 60)), notam.poll)
+        )
     if telegram.enabled:
         jobs.append(
             CollectorJob(

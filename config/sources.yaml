@@ -101,7 +101,13 @@ sources:
   - {id: me_aljazeera,name: Al Jazeera,      type: rss, url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, country: INTL, tier: 2}
   - {id: me_mee,      name: Middle East Eye, type: rss, url: "https://www.middleeasteye.net/rss", lang: en, country: INTL, tier: 2}
 
-# کانال‌های تلگرامی (نیاز به TELEGRAM_API_ID/HASH و نصب telethon)
-# بات باید عضو کانال باشد؛ برای کانال خصوصی، دعوت دستی لازم است.
+# کانال‌های تلگرامی — پایش لحظه‌ای (اختیاری):
+# نیاز به ENABLE_TELEGRAM_CHANNELS=true + TELEGRAM_API_ID/HASH + یک‌بار لاگین سشن (کالکتور telethon). پیام‌ها لحظه‌ای می‌رسند و برای کانال خصوصی لازم است.
+# نکته: پیش‌نویس وب t.me/s بدون لاگین خالی است (تلگرام با جاوااسکریپت رندر می‌شود) و از آن استفاده نشده است.
+#  2) رویدادمحور: کالکتور telethon با ENABLE_TELEGRAM_CHANNELS=true + TELEGRAM_API_ID/HASH
+#     + سشن لاگین — پیام‌ها لحظه‌ای می‌رسند و برای کانال خصوصی لازم است.
+# قواعد: id با tg_ شروع و یکتا باشد؛ lang = زبان غالب کانال (fa/en) برای مسیر صحیح مترجم.
 telegram_channels:
   - {id: tg_example, name: "نمونه", username: "", enabled: false}
+  # نمونه‌ی واقعی (کافیست enabled را true کنید):
+  # - {id: tg_aviationbrk, name: "AviationBRK", username: "aviationbrk", enabled: true, lang: en}
