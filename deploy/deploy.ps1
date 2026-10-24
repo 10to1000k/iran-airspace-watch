@@ -85,13 +85,21 @@ function Render([string]$Source, [string]$Destination) {
 
 # ── سکرت ──────────────────────────────────────────────────────
 Step "ساخت/به‌روزرسانی سکرت airwatch-secrets"
-$secretFile = Join-Path $env:TEMP "airwatch-secret.yaml"
+# از پوشه‌ی Temp کاربر استفاده نکن؛ در برخی ویندوزها TEMP به مسیر 8.3
+# (مثل C:\Users\SHOPA~1) اشاره می‌کند که ممکن است در PowerShell قابل resolve نباشد.
+$secretFile = Join-Path $root ".deploy-secret.rendered.yaml"
 $cmd = "oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml > `"$secretFile`""
 cmd /c $cmd
 if ($LASTEXITCODE -ne 0) { Fail "خواندن .env و ساخت سکرت شکست خورد." }
 cmd /c "oc apply -f `"$secretFile`" >nul"
 if ($LASTEXITCODE -ne 0) { Fail "اعمال سکرت شکست خورد." }
-Remove-Item $secretFile -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $secretFile) {
+    try {
+        Remove-Item -LiteralPath $secretFile -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "فایل موقت سکرت پاک نشد: $secretFile"
+    }
+}
 Write-Host "   سکرت به‌روز شد" -ForegroundColor DarkGray
 
 # ── منابع بیلد ────────────────────────────────────────────────
