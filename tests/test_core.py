@@ -132,6 +132,29 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_iran_airport_management_news_is_relevant_but_not_critical(self):
+        result = self.classifier.classify(
+            self.item(
+                "عضو جدید هیئت‌مدیره شرکت شهر فرودگاهی امام خمینی منصوب شد",
+                "در نشست امروز برنامه‌ی توسعه‌ی شهر فرودگاهی، سرمایه‌گذاری و مدیریت درآمد بررسی شد.",
+                lang="fa",
+                country="IR",
+            )
+        )
+        self.assertTrue(result.relevant)
+        self.assertEqual(result.category, "airport")
+        self.assertEqual(result.severity, "important")
+
+    def test_iran_civil_aviation_economy_is_relevant_without_flight_keywords(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran's civil aviation industry attracts new investment",
+                "The aviation sector is preparing a long-term business plan.",
+            )
+        )
+        self.assertTrue(result.relevant)
+        self.assertNotEqual(result.severity, "critical")
+
     def test_generic_cancellation_language_is_not_an_air_service_signal(self):
         result = self.classifier.classify(
             self.item(
@@ -385,14 +408,180 @@ class CollectorTests(unittest.TestCase):
             )
         )
 
+    def test_telegram_public_preview_parses_recent_post_without_admin(self):
+        from src.collectors import TelegramPublicPreviewCollector
+
+        config = load_config()
+        config.sources["telegram_channels"] = []
+        source = {
+            "id": "tg_test_baku",
+            "name": "Baku Airport",
+            "username": "bakuairport",
+            "lang": "en",
+            "country": "AZ",
+            "tier": 0,
+            "enabled": True,
+        }
+        config.sources["telegram_channels"] = [source]
+        now = int(datetime.now(timezone.utc).timestamp())
+        page = f"""
+        <div class=\"tgme_widget_message_wrap\">
+          <div class=\"tgme_widget_message js-widget_message\"
+               data-post=\"bakuairport/1760\" data-post-date=\"{now}\">
+            <div class=\"tgme_widget_message_bubble\">
+              <div class=\"tgme_widget_message_text js-message_text\" dir=\"auto\">
+                New flights to Tehran.<br/>OIIE route update.
+              </div>
+              <a class=\"tgme_widget_message_date\" href=\"https://t.me/bakuairport/1760\">
+                <time datetime=\"{datetime.now(timezone.utc).isoformat()}\">now</time>
+              </a>
+            </div>
+          </div>
+        </div>
+        """
+        collector = TelegramPublicPreviewCollector(config, db=None)
+
+        items = collector.parse_page(page, source)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].kind, "telegram")
+        self.assertEqual(items[0].source_id, "tg_test_baku")
+        self.assertEqual(items[0].url, "https://t.me/bakuairport/1760")
+        self.assertEqual(items[0].title, "New flights to Tehran.")
+        self.assertIn("OIIE route update.", items[0].body)
+        self.assertEqual(items[0].country, "AZ")
+        self.assertEqual(items[0].extra["telegram_collection"], "public_preview")
+
+    def test_telegram_public_preview_ignores_old_posts_and_dedupes_seen_items(self):
+        import tempfile
+        from unittest import mock
+
+        from src.collectors import TelegramPublicPreviewCollector
+        from src.db import Database
+
+        config = load_config()
+        source = {
+            "id": "tg_test_old",
+            "name": "Test Channel",
+            "username": "testchannel",
+            "lang": "en",
+            "country": "INTL",
+            "enabled": True,
+        }
+        config.sources["telegram_channels"] = [source]
+        now = int(datetime.now(timezone.utc).timestamp())
+        recent_page = f"""
+        <div class=\"tgme_widget_message\" data-post=\"testchannel/5\" data-post-date=\"{now}\">
+          <div class=\"tgme_widget_message_text js-message_text\">Iran flight update</div>
+        </div>
+        """
+        old_page = f"""
+        <div class=\"tgme_widget_message\" data-post=\"testchannel/4\" data-post-date=\"{now - 86400}\">
+          <div class=\"tgme_widget_message_text js-message_text\">Old Iran flight update</div>
+        </div>
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "preview.db")
+            try:
+                collector = TelegramPublicPreviewCollector(config, db)
+                recent = collector.parse_page(recent_page, source)
+                self.assertEqual(len(recent), 1)
+                fingerprint = util.fingerprint(
+                    recent[0].source_id, recent[0].url, recent[0].title, recent[0].body[:400]
+                )
+                self.assertTrue(db.add_item(recent[0], fingerprint))
+                self.assertEqual(collector.parse_page(recent_page, source), [])
+                self.assertEqual(collector.parse_page(old_page, source), [])
+            finally:
+                db.close()
+
+    def test_telegram_public_preview_polls_public_web_page(self):
+        import os
+        from unittest import mock
+
+        from src.collectors import TelegramPublicPreviewCollector
+
+        with mock.patch.dict(os.environ, {"ENABLE_TELEGRAM_PUBLIC_PREVIEW": "true"}):
+            config = load_config()
+        source = {
+            "id": "tg_poll_test",
+            "name": "Test Channel",
+            "username": "testchannel",
+            "lang": "en",
+            "country": "IR",
+            "enabled": True,
+        }
+        config.sources["telegram_channels"] = [source]
+        now = int(datetime.now(timezone.utc).timestamp())
+        page = f"""
+        <div class=\"tgme_widget_message\" data-post=\"testchannel/9\" data-post-date=\"{now}\">
+          <div class=\"tgme_widget_message_text js-message_text\">Iran flight operations update</div>
+        </div>
+        """
+
+        class FakeResponse:
+            status_code = 200
+            headers = {}
+            encoding = "utf-8"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield page.encode("utf-8")
+
+        collector = TelegramPublicPreviewCollector(config, db=None)
+        with mock.patch("src.collectors.requests.get", return_value=FakeResponse()) as get:
+            items = collector.poll()
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(get.call_args.args[0], "https://t.me/s/testchannel")
+        self.assertTrue(get.call_args.kwargs["stream"])
+
     def test_build_jobs_skips_disabled_collectors(self):
+        import os
+        from unittest import mock
+
         from src.airlines import AirlineIndex
         from src.collectors import build_jobs
 
-        config = load_config(dry_run=True)
-        jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
+        env = {
+            "ENABLE_TELEGRAM_PUBLIC_PREVIEW": "false",
+            "ENABLE_TELEGRAM_CHANNELS": "false",
+            "ENABLE_X": "false",
+            "TELEGRAM_CHANNELS": "",
+        }
+        with mock.patch.dict(os.environ, env):
+            config = load_config(dry_run=True)
+            jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
         self.assertEqual([job.name for job in jobs], ["rss"])
 
+    def test_build_jobs_schedules_public_telegram_without_bot(self):
+        import os
+        from unittest import mock
+
+        from src.airlines import AirlineIndex
+        from src.collectors import build_jobs
+
+        env = {
+            "ENABLE_TELEGRAM_PUBLIC_PREVIEW": "true",
+            "ENABLE_TELEGRAM_CHANNELS": "false",
+            "ENABLE_X": "false",
+            "TELEGRAM_CHANNELS": "",
+        }
+        with mock.patch.dict(os.environ, env):
+            config = load_config(dry_run=True)
+            jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
+        self.assertIn("telegram_public", [job.name for job in jobs])
+        public_job = next(job for job in jobs if job.name == "telegram_public")
+        self.assertEqual(public_job.interval, 300)
 
     def test_x_collector_uses_official_api_and_parses_recent_posts(self):
         import os
@@ -820,6 +1009,8 @@ class SocialStorageTests(unittest.TestCase):
             finally:
                 db.close()
 
+        self.assertIn("aviation", queries[0])
+        self.assertIn("هوانوردی", queries[1])
         self.assertIn("#IranAirspace", queries[2])
         self.assertIn("#iranaviationupdate", queries[3])
 

@@ -98,7 +98,7 @@ class Classifier:
     def _is_relevant(
         self, text: str, title_text: str, airports: list[str], airlines: list[str]
     ) -> bool:
-        """ایران و خدمت هوایی مشخص باید در تیتر/لید و نزدیک به هم باشند."""
+        """ایران و یک نشانه‌ی مشخص از هوانوردی/شرکت/زیرساخت باید در تیتر/لید نزدیک باشند."""
         # «پرواز تیم ملی به فینال» خبر خدمات هوایی نیست؛ مگر تیتر نشانه‌ی مستقیم عملیاتی داشته باشد.
         if (
             self._hit(title_text, self._non_aviation_title)
@@ -155,7 +155,9 @@ class Classifier:
             # خبر «زمینه» با کلمه‌ی تند (جنگ/حمله) نباید هم‌ارز بستن حریم هوایی شود
             severity = "important" if category == "context" else "critical"
         elif category in ("airspace", "airport"):
-            severity = "critical" if scores[category] >= 2 else "important"
+            # تکرار واژه‌ی فرودگاه/FIR، شدت عملیاتی را ثابت نمی‌کند؛ خبر توسعه و مدیریت
+            # فرودگاه هم relevant است ولی بدون نشانه‌ی اضطرار، نباید critical شود.
+            severity = self._base_severity.get(category, "important")
         else:
             severity = self._base_severity.get(category, "context")
 

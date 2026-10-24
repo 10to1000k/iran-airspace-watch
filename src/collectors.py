@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import calendar
 import logging
+import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Callable
 from urllib.parse import urlparse
 
@@ -27,7 +30,97 @@ USER_AGENT = (
 )
 
 MAX_FEED_BYTES = 2 * 1024 * 1024  # سقف ۲ مگابایت برای جلوگیری از مصرف بی‌حد رم یا قفل شدن سوکت
+MAX_TELEGRAM_PREVIEW_BYTES = 2 * 1024 * 1024
 BARE_INDEX_PATHS = {"", "/", "/blog", "/news", "/feed", "/rss"}
+
+
+class _TelegramPreviewParser(HTMLParser):
+    """استخراج متن پست‌ها از پیش‌نمایش عمومی t.me/s/<username>."""
+
+    _VOID_TAGS = {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    }
+
+    def __init__(self, username: str):
+        super().__init__(convert_charrefs=True)
+        self.username = username.casefold()
+        self.posts: list[dict] = []
+        self.current: dict | None = None
+        self._capturing_text = False
+        self._text_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
+        classes = set(str(attributes.get("class") or "").split())
+        post_ref = str(attributes.get("data-post") or "")
+
+        if tag == "div" and post_ref and "tgme_widget_message" in classes:
+            self._finish_post()
+            channel, separator, post_id = post_ref.rpartition("/")
+            if separator and channel.casefold() == self.username and post_id.isdigit():
+                self.current = {
+                    "id": post_id,
+                    "date": attributes.get("data-post-date"),
+                    "iso_date": None,
+                    "text_parts": [],
+                }
+            else:
+                self.current = None
+            self._capturing_text = False
+            self._text_depth = 0
+            return
+
+        if not self.current:
+            return
+
+        if tag == "time" and attributes.get("datetime") and not self.current.get("iso_date"):
+            self.current["iso_date"] = attributes["datetime"]
+
+        if "tgme_widget_message_text" in classes and not self._capturing_text:
+            self._capturing_text = True
+            self._text_depth = 1
+            return
+
+        if self._capturing_text:
+            if tag in self._VOID_TAGS:
+                if tag in {"br", "hr"}:
+                    self.current["text_parts"].append("\n")
+            else:
+                if tag in {"div", "p", "li"}:
+                    self.current["text_parts"].append("\n")
+                self._text_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self.current or not self._capturing_text or tag in self._VOID_TAGS:
+            return
+        self._text_depth -= 1
+        if self._text_depth <= 0:
+            self._capturing_text = False
+            self._text_depth = 0
+        elif tag in {"div", "p", "li"}:
+            self.current["text_parts"].append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self.current and self._capturing_text and data:
+            self.current["text_parts"].append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._finish_post()
+
+    def _finish_post(self) -> None:
+        if not self.current:
+            return
+        raw_text = "".join(self.current.pop("text_parts", []))
+        raw_text = raw_text.replace("\xa0", " ")
+        raw_text = re.sub(r"[\t\r\f\v ]+", " ", raw_text)
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        self.current["text"] = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+        self.posts.append(self.current)
+        self.current = None
+        self._capturing_text = False
+        self._text_depth = 0
 
 
 class RssCollector:
@@ -172,6 +265,171 @@ class TelegramChannelCollector:
         return self.bot.poll_channel_posts() if self.enabled else []
 
 
+class TelegramPreviewRateLimited(RuntimeError):
+    def __init__(self, retry_after: float = 60):
+        super().__init__("Telegram public preview rate limit")
+        self.retry_after = retry_after
+
+
+class TelegramPublicPreviewCollector:
+    """پایش کانال‌های عمومی از صفحه‌ی وب t.me/s؛ بدون Bot API یا حساب کاربری.
+
+    این صفحه API رسمی پایش نیست؛ فقط محتوای عمومی را می‌خوانیم، با فاصله‌ی
+    محافظه‌کارانه و سقف اندازه‌ی پاسخ. برای کانال خصوصی/بدون پیش‌نمایش کار نمی‌کند.
+    """
+
+    def __init__(self, config, db=None):
+        self.cfg = config
+        self.db = db
+        self.channels = config.telegram_channels
+        self.max_age_hours = max(1.0, float(config.get("poll.max_item_age_hours", 12)))
+        self.enabled = (
+            _flag_direct(config, "ENABLE_TELEGRAM_PUBLIC_PREVIEW", default=True)
+            and bool(self.channels)
+        )
+        self._cooldown_until = 0.0
+        if not self.enabled and self.channels:
+            log.info("پایش پیش‌نمایش عمومی تلگرام خاموش است")
+
+    @staticmethod
+    def _published_at(post: dict) -> datetime | None:
+        raw_timestamp = str(post.get("date") or "").strip()
+        if raw_timestamp:
+            try:
+                return datetime.fromtimestamp(int(raw_timestamp), tz=timezone.utc)
+            except (TypeError, ValueError, OSError, OverflowError):
+                pass
+
+        raw_iso = str(post.get("iso_date") or "").strip()
+        if raw_iso:
+            try:
+                value = datetime.fromisoformat(raw_iso.replace("Z", "+00:00"))
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                return value.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return None
+
+    def parse_page(self, page: str, source: dict) -> list[RawItem]:
+        username = str(source.get("username") or "").strip().lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            return []
+
+        parser = _TelegramPreviewParser(username)
+        parser.feed(page)
+        parser.close()
+        cutoff = util.now_utc() - timedelta(hours=self.max_age_hours)
+        source_id = str(source.get("id") or f"tg_{username.casefold()}")
+        source_url = f"https://t.me/{username}"
+        source_name = str(source.get("name") or f"@{username}")
+        try:
+            tier = int(source.get("tier", 1))
+        except (TypeError, ValueError):
+            tier = 1
+
+        items: list[RawItem] = []
+        seen_ids: set[str] = set()
+        for post in parser.posts:
+            message_id = str(post.get("id") or "")
+            text = str(post.get("text") or "").strip()
+            published_at = self._published_at(post)
+            if (
+                not message_id
+                or message_id in seen_ids
+                or not text
+                or not published_at
+                or published_at < cutoff
+            ):
+                continue
+            seen_ids.add(message_id)
+            url = f"{source_url}/{message_id}"
+            item = RawItem(
+                source_id=source_id,
+                source_name=source_name,
+                source_url=source_url,
+                title=text.splitlines()[0][:200],
+                body=util.truncate(text, 1200),
+                url=url,
+                lang=str(source.get("lang") or "fa"),
+                country=str(source.get("country") or "INTL"),
+                kind="telegram",
+                published_at=published_at,
+                extra={
+                    "tier": tier,
+                    "channel": username.casefold(),
+                    "telegram_message_id": message_id,
+                    "telegram_collection": "public_preview",
+                },
+            )
+            if self.db:
+                fingerprint = util.fingerprint(
+                    item.source_id, item.url, item.title, item.body[:400]
+                )
+                if self.db.item_seen(item.source_id, fingerprint):
+                    continue
+            items.append(item)
+        return items
+
+    def _read_page(self, username: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            raise ValueError("نام کاربری عمومی تلگرام معتبر نیست")
+        url = f"https://t.me/s/{username}"
+        with requests.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+            timeout=(8.0, 18.0),
+            stream=True,
+        ) as response:
+            if response.status_code == 429:
+                try:
+                    retry_after = float(response.headers.get("Retry-After", 60))
+                except (TypeError, ValueError):
+                    retry_after = 60.0
+                raise TelegramPreviewRateLimited(max(1.0, retry_after))
+            response.raise_for_status()
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=16_384):
+                if not chunk:
+                    continue
+                content.extend(chunk)
+                if len(content) > MAX_TELEGRAM_PREVIEW_BYTES:
+                    raise ValueError("پیش‌نمایش تلگرام از سقف ۲ مگابایت بزرگ‌تر است")
+            return bytes(content).decode(response.encoding or "utf-8", errors="replace")
+
+    def poll(self) -> list[RawItem]:
+        if not self.enabled or time.monotonic() < self._cooldown_until:
+            return []
+
+        out: list[RawItem] = []
+        for source in self.channels:
+            username = str(source.get("username") or "").strip().lstrip("@")
+            if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+                log.warning("نام کاربری نامعتبر برای پیش‌نمایش تلگرام نادیده گرفته شد")
+                continue
+            try:
+                page = self._read_page(username)
+                if "data-post" not in page:
+                    raise ValueError("پیش‌نمایش عمومی یا پست قابل‌خواندن نیست")
+                out.extend(self.parse_page(page, source))
+                if self.db:
+                    self.db.mark_source_ok(str(source.get("id") or f"tg_{username.casefold()}"))
+            except TelegramPreviewRateLimited as exc:
+                self._cooldown_until = time.monotonic() + min(exc.retry_after, 3600.0)
+                log.warning("تلگرام محدودیت نرخ داد؛ پایش تا %.0f ثانیه متوقف شد", min(exc.retry_after, 3600.0))
+                if self.db:
+                    self.db.mark_source_error(str(source.get("id") or f"tg_{username.casefold()}"), str(exc))
+                break
+            except Exception as exc:  # noqa: BLE001
+                log.warning("پیش‌نمایش عمومی تلگرام @%s خوانده نشد: %s", username, exc)
+                if self.db:
+                    self.db.mark_source_error(str(source.get("id") or f"tg_{username.casefold()}"), str(exc))
+        return out
+
+
 class XCollector:
     """جست‌وجوی رسمی X API v2؛ نیازمند X_BEARER_TOKEN و دسترسی recent search است."""
 
@@ -298,8 +556,8 @@ class XCollector:
         return out
 
 
-def _flag_direct(config, name: str) -> bool:
-    raw = config.env_get(name, "false") or "false"
+def _flag_direct(config, name: str, default: bool = False) -> bool:
+    raw = config.env_get(name, "true" if default else "false") or "false"
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -314,6 +572,7 @@ def build_jobs(config, db, airline_index, bot=None) -> list[CollectorJob]:
     rss = RssCollector(config, db)
     notam = NotamCollector(config)
     telegram = TelegramChannelCollector(config, bot)
+    telegram_public = TelegramPublicPreviewCollector(config, db)
     x = XCollector(config, airline_index, db)
 
     jobs = [CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll)]
@@ -327,6 +586,14 @@ def build_jobs(config, db, airline_index, bot=None) -> list[CollectorJob]:
                 "telegram",
                 int(config.get("poll.telegram_queue_seconds", 10)),
                 telegram.poll,
+            )
+        )
+    if telegram_public.enabled:
+        jobs.append(
+            CollectorJob(
+                "telegram_public",
+                int(config.get("poll.telegram_public_seconds", 300)),
+                telegram_public.poll,
             )
         )
     if x.enabled:

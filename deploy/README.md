@@ -58,7 +58,8 @@ LLM_MODEL=gemini-2.0-flash
 
 ### رصد شبکه‌های اجتماعی (اختیاری)
 
-- کانال‌های عمومی تلگرام: `ENABLE_TELEGRAM_CHANNELS=true` و `TELEGRAM_CHANNELS=channel_one,channel_two` را تنظیم کن؛ بات باید در هر کانال ادمین باشد.
+- پیش‌نمایش کانال‌های عمومی تلگرام با `ENABLE_TELEGRAM_PUBLIC_PREVIEW=true` از `t.me/s` خوانده می‌شود و نیاز به ادمین‌کردن بات ندارد؛ فهرست تأییدشده در `config/sources.yaml` است و هر نام اضافه را می‌توان در `TELEGRAM_CHANNELS=channel_one,channel_two` نوشت. این روش HTML عمومی است، نه API رسمی پایش؛ فقط کانال عمومی را می‌خواند و ممکن است با تغییر صفحه یا rate limit موقتاً متوقف شود.
+- اگر بات را در کانالی ادمین کرده‌ای، می‌توانی مسیر مستقیم Bot API را هم با `ENABLE_TELEGRAM_CHANNELS=true` فعال کنی؛ فقط پست‌های جدید را می‌گیرد.
 - X: `ENABLE_X=true` و `X_BEARER_TOKEN=...` را با توکن رسمی X API v2 تنظیم کن؛ دسترسی `recent search` ممکن است به پلن پولی نیاز داشته باشد.
 - هیچ توکن/کلیدی را در چت یا Git نگذار. بعد از تغییر `.env` در OpenShift اجرا کن: `.\deploy\deploy.ps1 -SkipBuild` تا Secret به‌روز و پاد ری‌استارت شود.
 - هشتگ‌های ثابت و queryهای جست‌وجو در `config/settings.yaml` هستند؛ هشتگ‌های تازه فقط پس از تأیید فیلتر ایران‌محور و تکرار در منابع مستقل دنبال می‌شوند. Bot API تلگرام جست‌وجوی سراسری کانال‌ها را انجام نمی‌دهد.

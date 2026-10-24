@@ -101,7 +101,14 @@ sources:
   - {id: me_aljazeera,name: Al Jazeera,      type: rss, url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, country: INTL, tier: 2}
   - {id: me_mee,      name: Middle East Eye, type: rss, url: "https://www.middleeasteye.net/rss", lang: en, country: INTL, tier: 2}
 
-# کانال‌های تلگرام از Bot API دریافت می‌شوند. بات را در کانال‌های عمومی ادمین کن.
-# می‌توانی نام کاربری‌ها را هم بدون ویرایش این فایل در TELEGRAM_CHANNELS بنویسی.
+# کانال‌های تأییدشده‌ی عمومی از صفحه‌ی وب t.me/s خوانده می‌شوند (بدون نیاز به ادمین).
+# این پیش‌نمایش HTML رسمیِ پایش نیست و ممکن است با تغییر تلگرام یا محدودیت نرخ موقتاً از کار بیفتد.
+# برای Bot API و دریافت channel_post هم‌چنان می‌توان ENABLE_TELEGRAM_CHANNELS=true گذاشت؛
+# در آن حالت بات باید در کانال ادمین باشد. نام‌های اضافی را می‌توان در TELEGRAM_CHANNELS نوشت.
 telegram_channels:
-  - {id: tg_example, name: "نمونه", username: "", enabled: false}
+  - {id: tg_ika_city,       name: IKA Airport City,          username: IKAairportcity,       lang: fa, country: IR, tier: 0, enabled: true}
+  - {id: tg_bakuairport,    name: Baku Airport,              username: bakuairport,           lang: en, country: AZ, tier: 0, enabled: true}
+  - {id: tg_azal,            name: AZAL - Azerbaijan Airlines,username: azerbaijanairlines,    lang: az, country: AZ, tier: 3, enabled: true}
+  - {id: tg_iraqi_airways,  name: Iraqi Airways,             username: iraqiairways2,          lang: ar, country: IQ, tier: 3, enabled: true}
+  - {id: tg_fly_baghdad,    name: Fly Baghdad,               username: flybaghdadairways,     lang: ar, country: IQ, tier: 3, enabled: true}
+  - {id: tg_wam,            name: Emirates News Agency (WAM),username: wamnews_en,             lang: en, country: AE, tier: 0, enabled: true}

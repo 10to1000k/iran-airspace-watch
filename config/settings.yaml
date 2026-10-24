@@ -18,6 +18,8 @@ poll:
   notam_seconds: 60
   x_seconds: 300
   telegram_queue_seconds: 10
+  # هر نوبت فقط پیش‌نمایش عمومی کانال‌های منتخب تلگرام را با فاصله‌ی محافظه‌کارانه می‌خواند.
+  telegram_public_seconds: 300
   # فقط آیتم‌های تازه‌تر از این بازه پردازش می‌شوند (جلوگیری از سیل اولیه)
   max_item_age_hours: 12
   max_items_per_feed: 15
@@ -49,8 +51,8 @@ social:
     - فرودگاه_تهران
     - لغو_پرواز_ایران
   x_keyword_queries:
-    - '(Iran OR Iranian OR Tehran OR IKA OR OIIE OR OIII OR OIIX) (flight OR flights OR airline OR airport OR airspace OR NOTAM OR runway OR route) -is:retweet -is:reply'
-    - '(ایران OR ایرانی OR تهران OR IKA OR OIIE OR OIII OR OIIX) (پرواز OR فرودگاه OR حریم_هوایی OR لغو_پرواز OR تأخیر_پرواز OR مسیر_پروازی) -is:retweet -is:reply'
+    - '(Iran OR Iranian OR Tehran OR IKA OR OIIE OR OIII OR OIIX) (flight OR flights OR airline OR airport OR aviation OR "civil aviation" OR "aviation industry" OR "air transport" OR airspace OR NOTAM OR runway OR route OR havalimanı OR havacılık OR مطار OR طيران OR авиация OR аэропорт OR 航空 OR 机场) -is:retweet -is:reply'
+    - '(ایران OR ایرانی OR تهران OR IKA OR OIIE OR OIII OR OIIX) (پرواز OR فرودگاه OR هوانوردی OR هواپیمایی OR صنعت_هوانوردی OR حریم_هوایی OR لغو_پرواز OR تأخیر_پرواز OR مسیر_پروازی OR توسعه_فرودگاه) -is:retweet -is:reply'
 
 # ── NOTAM ────────────────────────────────────────────────────
 # کالکتور NOTAM سازمان هوانوردی آمریکا (FAA) کنار گذاشته شده است: کلید API
@@ -73,7 +75,7 @@ health:
   stale_seconds: 300
 
 # ── فیلتر ربط ────────────────────────────────────────────────
-# هر خبر باید به ایران مرتبط باشد و نشانه‌ی مشخصی از خدمت/عملیات هوایی داشته باشد.
+# هر خبر باید به ایران مرتبط باشد و نشانه‌ی مشخصی از حوزه‌ی هوانوردی داشته باشد.
 # سیگنال‌ها باید در تیتر یا ابتدای لید نزدیک باشند؛ هم‌وقوعی دور از هم کافی نیست.
 relevance:
   airport_codes: [OIIE, OIII, OIIX, IKA, THR]
@@ -90,9 +92,30 @@ relevance:
     ru: [иран, тегеран, мехрабад, "имам хомейни"]
     ar: [إيران, ايران, طهران, مهرآباد, "الإمام الخميني"]
     zh: [伊朗, 德黑兰, 梅赫拉巴德, 伊玛目霍梅尼]
-  # نشانه‌های مشخص خدمات/عملیات هوایی؛ «هواپیما/هوانوردی» به‌تنهایی کافی نیست.
-  # این واژه‌ها باید نزدیک به اشاره‌ی ایران، ایرلاین ایرانی یا فرودگاه ایران باشند.
+  # نشانه‌های حوزه‌ی هوانوردی از عملیات تا شرکت‌ها، مدیریت/اقتصاد/توسعه‌ی فرودگاه.
+  # عبارت هواپیما به‌تنهایی کافی نیست؛ نشانه‌ی هوانوردی باید به ایران نزدیک باشد.
   service_keywords:
+    - aviation
+    - "aviation industry"
+    - "aviation sector"
+    - "civil aviation"
+    - "air transport"
+    - "air transportation"
+    - هوانوردی
+    - "صنعت هوانوردی"
+    - "هوانوردی غیرنظامی"
+    - "حمل‌ونقل هوایی"
+    - "حمل و نقل هوایی"
+    - havacılık
+    - "sivil havacılık"
+    - "hava taşımacılığı"
+    - авиация
+    - "гражданская авиация"
+    - авиаперевозки
+    - "الطيران المدني"
+    - "النقل الجوي"
+    - 民航
+    - 航空运输
     - flight
     - flights
     - airline
@@ -296,7 +319,7 @@ relevance:
 categories:
   airspace:
     fa: حریم هوایی
-    severity: critical
+    severity: important
     keywords:
       - notam
       - fir
@@ -310,7 +333,7 @@ categories:
       - 领空
   airport:
     fa: فرودگاه
-    severity: critical
+    severity: important
     keywords:
       - runway
       - ground stop
