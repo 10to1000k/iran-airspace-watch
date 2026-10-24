@@ -22,7 +22,7 @@ def run_once(config, db, bot) -> dict[str, int]:
     index = AirlineIndex(config.airlines)
     pipeline = Pipeline(config, db, bot)
     totals: dict[str, int] = {}
-    for job in build_jobs(config, db, index):
+    for job in build_jobs(config, db, index, bot):
         try:
             items = job.fn()
         except Exception as exc:  # noqa: BLE001
@@ -74,7 +74,7 @@ def run_forever(config, db, bot) -> None:
     stop = threading.Event()
     _install_signal_handlers(stop)
 
-    jobs = build_jobs(config, db, index)
+    jobs = build_jobs(config, db, index, bot)
     threads: list[threading.Thread] = []
     for job in jobs:
         thread = threading.Thread(

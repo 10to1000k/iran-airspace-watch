@@ -59,10 +59,28 @@ class Config:
 
     @property
     def telegram_channels(self) -> list[dict]:
-        return [
-            c for c in self.sources.get("telegram_channels", [])
+        channels = [
+            dict(c) for c in self.sources.get("telegram_channels", [])
             if c.get("enabled", False) and c.get("username")
         ]
+        known = {str(c["username"]).strip().lstrip("@").casefold() for c in channels}
+        # فهرست قابل‌تغییر بدون ویرایش کد؛ فقط نام کاربری کانال‌های عمومی.
+        for raw in (os.getenv("TELEGRAM_CHANNELS") or "").split(","):
+            username = raw.strip().lstrip("@").strip()
+            key = username.casefold()
+            if not username or key in known:
+                continue
+            channels.append({
+                "id": f"tg_{username.lower()}",
+                "name": f"Telegram @{username}",
+                "username": username,
+                "lang": "fa",
+                "country": "INTL",
+                "tier": 1,
+                "enabled": True,
+            })
+            known.add(key)
+        return channels
 
     # ── محیط ─────────────────────────────────────────────────
     @property

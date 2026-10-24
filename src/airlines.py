@@ -49,12 +49,27 @@ class AirlineIndex:
             return []
         norm = util.normalize(text)
         found: list[str] = []
+        matched_spans: list[tuple[int, int]] = []
 
         for alias, canonical in self._ordered:
             if canonical in found:
                 continue
-            if alias in norm:
+            words = alias.split()
+            pattern = re.compile(
+                r"(?<!\w)" + r"\s+".join(re.escape(word) for word in words) + r"(?!\w)"
+            )
+            for match in pattern.finditer(norm):
+                # «Iran Air» نباید از عبارت «Iran Air Force» به اشتباه استخراج شود.
+                if canonical == "Iran Air" and re.match(r"\s+force\b", norm[match.end():]):
+                    continue
+                if any(
+                    match.start() < end and start < match.end()
+                    for start, end in matched_spans
+                ):
+                    continue
                 found.append(canonical)
+                matched_spans.append(match.span())
+                break
 
         for code in set(_UPPER_CODE.findall(text)):
             canonical = self._codes.get(code)

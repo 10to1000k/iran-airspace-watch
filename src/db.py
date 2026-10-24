@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from pathlib import Path
 
 from . import util
+from .models import RawItem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -72,6 +74,33 @@ CREATE TABLE IF NOT EXISTS sources_health (
     last_error  TEXT,
     error_count INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS hashtag_observations (
+    tag             TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    item_fingerprint TEXT NOT NULL,
+    observed_at     TEXT NOT NULL,
+    PRIMARY KEY(tag, source_id, item_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_hashtag_observations_date
+    ON hashtag_observations(observed_at);
+
+CREATE TABLE IF NOT EXISTS telegram_inbox (
+    update_key   TEXT PRIMARY KEY,
+    source_id    TEXT NOT NULL,
+    source_name  TEXT NOT NULL,
+    source_url   TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    lang         TEXT NOT NULL,
+    country      TEXT NOT NULL,
+    extra_json   TEXT NOT NULL DEFAULT '{}',
+    published_at TEXT NOT NULL,
+    queued_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_inbox_date
+    ON telegram_inbox(published_at);
 """
 
 
@@ -103,6 +132,116 @@ class Database:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
             )
+            self.conn.commit()
+
+    # ── هشتگ‌های شبکه‌های اجتماعی ─────────────────────────────
+    def record_hashtags(self, tags: list[str], source_id: str, fingerprint: str) -> None:
+        if not tags or not source_id or not fingerprint:
+            return
+        observed = util.iso(util.now_utc())
+        rows = [
+            (tag, source_id, fingerprint, observed)
+            for tag in set(tags)
+            if tag and len(tag) <= 64
+        ]
+        if not rows:
+            return
+        with self._lock:
+            self.conn.executemany(
+                """INSERT OR IGNORE INTO hashtag_observations
+                   (tag, source_id, item_fingerprint, observed_at) VALUES(?,?,?,?)""",
+                rows,
+            )
+            self.conn.commit()
+
+    def discovered_hashtags(
+        self, min_mentions: int = 2, min_sources: int = 2,
+        days: int = 30, limit: int = 24,
+    ) -> list[str]:
+        since = util.hours_ago_iso(max(1, days) * 24)
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT tag
+                   FROM hashtag_observations
+                   WHERE observed_at >= ?
+                   GROUP BY tag
+                   HAVING COUNT(*) >= ? AND COUNT(DISTINCT source_id) >= ?
+                   ORDER BY COUNT(DISTINCT source_id) DESC, MAX(observed_at) DESC
+                   LIMIT ?""",
+                (since, max(1, min_mentions), max(1, min_sources), max(1, limit)),
+            ).fetchall()
+        return [str(row["tag"]) for row in rows]
+
+    # ── صف بادوام پست‌های کانال تلگرام ──────────────────────
+    def enqueue_telegram_post(self, update_key: str, item: RawItem) -> None:
+        if not update_key:
+            return
+        published_at = item.published_at or util.now_utc()
+        with self._lock:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO telegram_inbox
+                   (update_key, source_id, source_name, source_url, url, title, body,
+                    lang, country, extra_json, published_at, queued_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    update_key,
+                    item.source_id,
+                    item.source_name,
+                    item.source_url,
+                    item.url,
+                    item.title,
+                    item.body,
+                    item.lang,
+                    item.country,
+                    json.dumps(item.extra, ensure_ascii=False),
+                    util.iso(published_at),
+                    util.iso(util.now_utc()),
+                ),
+            )
+            self.conn.commit()
+
+    def pending_telegram_posts(self, limit: int = 100, max_age_hours: float = 12) -> list[RawItem]:
+        cutoff = util.hours_ago_iso(max(1.0, float(max_age_hours)))
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM telegram_inbox WHERE published_at < ?", (cutoff,)
+            )
+            rows = self.conn.execute(
+                """SELECT * FROM telegram_inbox
+                   WHERE published_at >= ? ORDER BY queued_at, update_key LIMIT ?""",
+                (cutoff, max(1, int(limit))),
+            ).fetchall()
+            self.conn.commit()
+
+        items: list[RawItem] = []
+        for row in rows:
+            try:
+                extra = json.loads(row["extra_json"] or "{}")
+            except (TypeError, ValueError):
+                extra = {}
+            extra["telegram_inbox_id"] = str(row["update_key"])
+            items.append(
+                RawItem(
+                    source_id=str(row["source_id"]),
+                    source_name=str(row["source_name"]),
+                    source_url=str(row["source_url"]),
+                    url=str(row["url"]),
+                    title=str(row["title"]),
+                    body=str(row["body"]),
+                    lang=str(row["lang"]),
+                    country=str(row["country"]),
+                    kind="telegram",
+                    published_at=util.parse_iso(row["published_at"]),
+                    extra=extra,
+                )
+            )
+        return items
+
+    def ack_telegram_post(self, update_key: str) -> None:
+        if not update_key:
+            return
+        with self._lock:
+            self.conn.execute("DELETE FROM telegram_inbox WHERE update_key=?", (update_key,))
             self.conn.commit()
 
     # ── items ────────────────────────────────────────────────
@@ -336,6 +475,9 @@ class Database:
                 (cutoff,),
             )
             deleted = cur.rowcount
+            self.conn.execute(
+                "DELETE FROM hashtag_observations WHERE observed_at < ?", (cutoff,)
+            )
             tr_count = self.conn.execute(
                 "SELECT COUNT(*) c FROM kv WHERE key LIKE 'tr:%'"
             ).fetchone()["c"]

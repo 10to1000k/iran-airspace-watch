@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import html
 import logging
 import threading
@@ -11,6 +11,7 @@ import time
 import requests
 
 from . import formatter, util
+from .models import RawItem
 
 log = logging.getLogger(__name__)
 
@@ -34,12 +35,31 @@ class TelegramBot:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_ready_callbacks: list = []
+        enabled_raw = (config.env_get("ENABLE_TELEGRAM_CHANNELS", "false") or "false")
+        self._channel_monitor_enabled = (
+            enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
+            and bool(config.telegram_channels)
+        )
+        self._channel_sources = {
+            str(channel["username"]).strip().lstrip("@").casefold(): channel
+            for channel in config.telegram_channels
+            if channel.get("username")
+        } if self._channel_monitor_enabled else {}
 
     def bind_health(self, health) -> None:
         self.health = health
 
     def on_recipient_ready(self, callback) -> None:
         self._on_ready_callbacks.append(callback)
+
+    def poll_channel_posts(self) -> list[RawItem]:
+        return self.db.pending_telegram_posts(
+            limit=100,
+            max_age_hours=float(self.cfg.get("poll.max_item_age_hours", 12)),
+        )
+
+    def ack_channel_post(self, update_key: str) -> None:
+        self.db.ack_telegram_post(update_key)
 
     # ── زیرساخت ──────────────────────────────────────────────
     @property
@@ -214,9 +234,12 @@ class TelegramBot:
         offset = int(self.db.kv_get("tg_offset", "0") or 0)
         while not self._stop.is_set():
             try:
+                allowed_updates = ["message", "callback_query"]
+                if self._channel_monitor_enabled:
+                    allowed_updates.append("channel_post")
                 updates = self._call(
                     "getUpdates",
-                    {"offset": offset, "timeout": 25, "allowed_updates": ["message", "callback_query"]},
+                    {"offset": offset, "timeout": 25, "allowed_updates": allowed_updates},
                     timeout=40,
                     retries=1,
                 )
@@ -242,16 +265,25 @@ class TelegramBot:
                 continue
 
             for update in updates or []:
-                offset = int(update["update_id"]) + 1
-                self.db.kv_set("tg_offset", str(offset))
+                next_offset = int(update["update_id"]) + 1
                 try:
+                    # channel_post پیش از تأیید offset در SQLite صف می‌شود؛ با ری‌استارت
+                    # پاد، نه خبر گم می‌شود و نه آپدیت پیش از ذخیره‌سازی تأیید می‌شود.
                     self._handle_update(update)
+                    self.db.kv_set("tg_offset", str(next_offset))
+                    offset = next_offset
                 except Exception:  # noqa: BLE001
-                    log.exception("پردازش آپدیت تلگرام ناموفق")
+                    log.exception("پردازش/ثبت آپدیت تلگرام ناموفق؛ برای تلاش مجدد offset جلو نمی‌رود")
+                    self._stop.wait(2)
+                    break
 
     def _handle_update(self, update: dict) -> None:
         if "callback_query" in update:
             self._handle_callback(update["callback_query"])
+            return
+        channel_post = update.get("channel_post")
+        if channel_post:
+            self._handle_channel_post(channel_post, update.get("update_id"))
             return
         message = update.get("message")
         if not message:
@@ -268,6 +300,7 @@ class TelegramBot:
                 "دستورها:\n"
                 "/status — وضعیت زنده و سلامت منابع\n"
                 "/last — آخرین خبرهای ثبت‌شده\n"
+                "/hashtags — هشتگ‌های پایش‌شده\n"
                 "/wrong — روی خبر اشتباه ریپلای کن و بزن تا اصلاح شود\n"
                 "/help — راهنما",
                 chat_id=chat_id,
@@ -285,6 +318,7 @@ class TelegramBot:
                 "خبرهای هم‌موضوع در یک رشته می‌آیند؛ پیام اول همیشه به‌روز می‌شود.\n"
                 "/status — وضعیت زنده و سلامت فیدها\n"
                 "/last — ۵ رخداد آخر\n"
+                "/hashtags — هشتگ‌های پایش‌شده\n"
                 "/wrong — ریپلای روی خبر اشتباه",
                 chat_id=chat_id,
             )
@@ -333,6 +367,23 @@ class TelegramBot:
             self.send("\n".join(lines), chat_id=chat_id)
             return
 
+        if command in ("/hashtags", "/tags"):
+            fixed = self.cfg.get("social.seed_hashtags", []) or []
+            discovered = self.db.discovered_hashtags(
+                min_mentions=int(self.cfg.get("social.hashtag_min_mentions", 2)),
+                min_sources=int(self.cfg.get("social.hashtag_min_sources", 2)),
+                days=int(self.cfg.get("social.hashtag_window_days", 30)),
+                limit=int(self.cfg.get("social.max_discovered_hashtags", 24)),
+            )
+            lines = ["🏷 <b>هشتگ‌های پایش</b>", "", "<b>ثابت:</b>"]
+            lines.extend(f"#{html.escape(str(tag).lstrip('#'))}" for tag in fixed[:30])
+            lines.extend(["", "<b>کشف‌شده از منابع مرتبط:</b>"])
+            lines.extend(f"#{html.escape(tag)}" for tag in discovered)
+            if not discovered:
+                lines.append("هنوز هشتگ تازه‌ای از چند منبع مستقل تأیید نشده است.")
+            self.send("\n".join(lines), chat_id=chat_id)
+            return
+
         if command == "/wrong":
             replied = message.get("reply_to_message")
             if not replied:
@@ -351,6 +402,51 @@ class TelegramBot:
             )
             self.send("❌ خبر اصلاح شد و منبعش برای بازبینی علامت خورد.", chat_id=chat_id)
             return
+
+    def _handle_channel_post(self, message: dict, update_id: int | str | None = None) -> None:
+        if not self._channel_monitor_enabled:
+            return
+        chat = message.get("chat") or {}
+        username = str(chat.get("username") or "").strip().lstrip("@").casefold()
+        source = self._channel_sources.get(username)
+        if not source:
+            return
+
+        text = (message.get("text") or message.get("caption") or "").strip()
+        if not text:
+            return
+        message_id = message.get("message_id")
+        if not message_id:
+            return
+        try:
+            published_at = datetime.fromtimestamp(int(message["date"]), tz=timezone.utc)
+        except (KeyError, TypeError, ValueError, OSError):
+            published_at = util.now_utc()
+        max_age = max(1.0, float(self.cfg.get("poll.max_item_age_hours", 12)))
+        if published_at < util.now_utc() - timedelta(hours=max_age):
+            return
+
+        channel_name = str(source.get("name") or chat.get("title") or f"@{username}")
+        source_url = f"https://t.me/{username}"
+        item = RawItem(
+            source_id=str(source.get("id") or f"tg_{username}"),
+            source_name=channel_name,
+            source_url=source_url,
+            title=text.splitlines()[0][:200],
+            body=util.truncate(text, 1200),
+            url=f"{source_url}/{message_id}",
+            lang=str(source.get("lang") or "fa"),
+            country=str(source.get("country") or "INTL"),
+            kind="telegram",
+            published_at=published_at,
+            extra={"tier": int(source.get("tier", 1)), "channel": username},
+        )
+        update_key = (
+            f"tg-update:{update_id}"
+            if update_id is not None
+            else f"tg-post:{username}:{message_id}"
+        )
+        self.db.enqueue_telegram_post(update_key, item)
 
     def _handle_callback(self, callback: dict) -> None:
         data = callback.get("data") or ""

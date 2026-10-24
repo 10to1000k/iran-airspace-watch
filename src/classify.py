@@ -7,6 +7,7 @@ import re
 from . import util
 from .airlines import AirlineIndex
 from .models import Classification, RawItem
+from .social import expand_hashtags
 
 _CATEGORY_PRIORITY = ["airspace", "airport", "airline", "context"]
 
@@ -21,26 +22,53 @@ def _contains(text: str, keyword: str) -> bool:
     return kw in text
 
 
+def _term_spans(text: str, keywords: list[str]) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for keyword in keywords:
+        kw = util.normalize(keyword)
+        if not kw:
+            continue
+        pattern = (
+            re.compile(rf"\b{re.escape(kw)}\b")
+            if len(kw) <= 4 and kw.isascii()
+            else re.compile(re.escape(kw))
+        )
+        spans.extend(match.span() for match in pattern.finditer(text))
+    return spans
+
+
+def _nearby(text: str, left: list[str], right: list[str], max_distance: int = 240) -> bool:
+    """سیگنال‌های دو طرف باید در یک بخش کوتاه باشند، نه دو جای دور از هم در خبر."""
+    left_spans = _term_spans(text, left)
+    right_spans = _term_spans(text, right)
+    for left_start, left_end in left_spans:
+        for right_start, right_end in right_spans:
+            distance = max(0, max(left_start - right_end, right_start - left_end))
+            if distance <= max_distance:
+                return True
+    return False
+
+
 class Classifier:
     def __init__(self, config):
         self.cfg = config
         self.settings = config.settings
         self.airlines = AirlineIndex(config.airlines)
+        self._iranian_airline_terms: dict[str, list[str]] = {}
+        for entry in config.airlines:
+            if entry.get("country") != "IR":
+                continue
+            terms = [entry.get("name", ""), *(entry.get("aliases") or [])]
+            self._iranian_airline_terms[entry["name"]] = [
+                term for term in terms if len(util.normalize(term)) >= AirlineIndex.MIN_ALIAS
+            ]
 
         self._relevance: list[str] = []
         for words in (self.settings.get("relevance", {}).get("keywords") or {}).values():
             self._relevance.extend(words or [])
-        self._aviation = self.settings.get("relevance", {}).get("aviation_keywords") or []
-        self._strong = self.settings.get("relevance", {}).get("strong_aviation_keywords") or []
-        self._region = self.settings.get("relevance", {}).get("region_keywords") or []
-        # قانون منطقه فقط با سیگنال‌های واقعی حریم هوایی فعال می‌شود، نه با «airline».
-        self._airspace_signal = (
-            self.settings.get("relevance", {}).get("airspace_signal_keywords") or self._strong
-        )
-        self._include_conflict = bool(
-            self.settings.get("relevance", {}).get("include_iran_conflict_context", False)
-        )
-        self._conflict = self.settings.get("relevance", {}).get("conflict_keywords") or []
+        self._service = self.settings.get("relevance", {}).get("service_keywords") or []
+        self._direct_service = self.settings.get("relevance", {}).get("direct_service_keywords") or []
+        self._non_aviation_title = self.settings.get("relevance", {}).get("non_aviation_title_keywords") or []
         self._airport_codes = self.settings.get("relevance", {}).get("airport_codes") or []
 
         self._categories: dict[str, list[str]] = {}
@@ -51,6 +79,9 @@ class Classifier:
 
         self._critical = self.settings.get("severity", {}).get("critical") or []
         self._max_match_chars = int(self.settings.get("relevance", {}).get("max_match_chars", 1200))
+        self._relevance_window_chars = int(
+            self.settings.get("relevance", {}).get("relevance_window_chars", 420)
+        )
 
     # ── کمکی ─────────────────────────────────────────────────
     @staticmethod
@@ -64,44 +95,52 @@ class Classifier:
                 found.append(code.upper())
         return found
 
-    def _is_relevant(self, text: str, airports: list[str], airlines: list[str]) -> bool:
-        """ایران + هوانوردی، هر دو لازم‌اند.
-
-        فقط «ایران» کافی نیست: خبر ورزشی و شهری هم «ایران» دارد.
-        «پرواز» تنها هم کافی نیست: «پرواز تیم ملی به فینال» خبر ورزشی است.
-        """
-        if airports:
-            return True
-        # ایرلاین ایرانی خودش «موجودیت ایرانی» است: خبر «ماهان ایر در گوانگژو»
-        # لزوماً کلمه‌ی ایران را در متن ندارد.
-        if any(self.airlines.is_iranian(name) for name in airlines):
-            return True
-        if airlines and self._hit(text, self._region) and self._hit(text, self._airspace_signal):
-            # مثل «Emirates suspends flights across Middle East airspace»
-            return True
-        if not self._hit(text, self._relevance):
+    def _is_relevant(
+        self, text: str, title_text: str, airports: list[str], airlines: list[str]
+    ) -> bool:
+        """ایران و خدمت هوایی مشخص باید در تیتر/لید و نزدیک به هم باشند."""
+        # «پرواز تیم ملی به فینال» خبر خدمات هوایی نیست؛ مگر تیتر نشانه‌ی مستقیم عملیاتی داشته باشد.
+        if (
+            self._hit(title_text, self._non_aviation_title)
+            and not self._hit(title_text, self._direct_service)
+        ):
             return False
-        if self._include_conflict and self._hit(text, self._conflict):
-            # خبر ژئوپلیتیک ایران، فقط اگر خودت روشن کرده باشی
+        if not self._hit(text, self._service):
+            return False
+
+        # حتی کد فرودگاه/نام ایرلاین ایرانی باید نزدیک به نشانه‌ی خدمت باشد؛
+        # اشاره‌های جداگانه در تیتر و انتهای لید نباید با هم مثبت کاذب بسازند.
+        if airports and _nearby(text, airports, self._service):
             return True
-        if airlines:
+
+        iranian_airline_terms = [
+            term
+            for name in airlines
+            if self.airlines.is_iranian(name)
+            for term in self._iranian_airline_terms.get(name, [name])
+        ]
+        if iranian_airline_terms and _nearby(text, iranian_airline_terms, self._service):
             return True
-        if self._hit(text, self._strong):
-            return True
-        weak_hits = sum(1 for kw in self._aviation if _contains(text, kw))
-        return weak_hits >= 2
+
+        # خبر ایرلاین خارجی باید ایران را به خدمت هوایی ربط دهد؛ صرف «خاورمیانه» کافی نیست.
+        return _nearby(text, self._relevance, self._service)
+
 
     # ── اصلی ─────────────────────────────────────────────────
     def classify(self, item: RawItem) -> Classification:
-        # سقف طول متن: صفحه‌های بلند به‌طور تصادفی کلیدواژه‌های ایران و هوانوردی را کنار هم دارند
-        raw_text = (item.text or "")[: self._max_match_chars]
-        text = util.normalize(raw_text)
+        # فقط تیتر و ابتدای لید برای تصمیم ربط بررسی می‌شوند؛ متن‌های بلند معمولاً
+        # کلمات نامرتبط را در نقاط دور از هم دارند و مثبت کاذب می‌سازند.
+        lead_chars = min(self._relevance_window_chars, self._max_match_chars)
+        raw_text = f"{item.title or ''}\n{(item.body or '')[:lead_chars]}"[: self._max_match_chars]
+        expanded_text = expand_hashtags(raw_text)
+        text = util.normalize(expanded_text)
+        title_text = util.normalize(expand_hashtags(item.title or ""))
         airports = self._airports_in(text)
         # مهم: متن اصلی (قبل از lowercase شدن) به AirlineIndex داده می‌شود تا کدهای ۳حرفی
         # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
-        airlines = self.airlines.match(raw_text)
+        airlines = self.airlines.match(expanded_text)
 
-        if not self._is_relevant(text, airports, airlines):
+        if not self._is_relevant(text, title_text, airports, airlines):
             return Classification(relevant=False, matched=[])
 
         scores = {

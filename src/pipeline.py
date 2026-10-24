@@ -8,6 +8,7 @@ from datetime import timedelta
 from . import formatter, util
 from .classify import Classifier
 from .models import RawItem
+from .social import extract_hashtags
 from .translator import Translator
 
 log = logging.getLogger(__name__)
@@ -30,24 +31,45 @@ class Pipeline:
 
         # ثبت آیتم اول انجام می‌شود تا دو کالکتور همزمان هر دو نفرستند
         if not self.db.add_item(item, fp):
+            self._ack_telegram_post(item)
             return "seen"
 
         try:
             classification = self.classifier.classify(item)
             if not classification.relevant:
+                self._ack_telegram_post(item)
                 return "irrelevant"
 
             tokens = util.tokens(f"{item.title} {item.body}")
             existing = self._find_cluster(tokens, classification)
 
             if existing is None:
-                return self._create_event(item, fp, classification, tokens)
-            return self._update_event(item, fp, classification, existing)
+                outcome = self._create_event(item, fp, classification, tokens)
+            else:
+                outcome = self._update_event(item, fp, classification, existing)
+
+            if (
+                item.kind in {"x", "telegram"}
+                and self.cfg.get("social.auto_discover_hashtags", True)
+            ):
+                self.db.record_hashtags(extract_hashtags(item.text), item.source_id, fp)
+            self._ack_telegram_post(item)
+            return outcome
         except Exception:
             # اگر قبل از اتصال آیتم به رخداد خطای غیرمنتظره رخ داد، آیتم را آزاد کن
             # تا در چرخه‌ی بعدی دوباره پردازش شود و برای همیشه نسوزد.
             self.db.delete_item(item.source_id, fp)
             raise
+
+    def _ack_telegram_post(self, item: RawItem) -> None:
+        update_key = item.extra.get("telegram_inbox_id")
+        acknowledge = getattr(self.bot, "ack_channel_post", None)
+        if not update_key or not callable(acknowledge):
+            return
+        try:
+            acknowledge(str(update_key))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("تأیید پیام صف تلگرام ناموفق ماند؛ در چرخه‌ی بعد دوباره بررسی می‌شود: %s", exc)
 
     # ── خوشه‌بندی ────────────────────────────────────────────
     def _find_cluster(self, tokens: set[str], classification):

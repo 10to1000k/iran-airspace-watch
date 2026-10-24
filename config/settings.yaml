@@ -16,15 +16,14 @@ poll:
   rss_seconds: 75
   rss_workers: 6
   notam_seconds: 60
-  x_seconds: 90
+  x_seconds: 300
   telegram_queue_seconds: 10
   # فقط آیتم‌های تازه‌تر از این بازه پردازش می‌شوند (جلوگیری از سیل اولیه)
   max_item_age_hours: 12
   max_items_per_feed: 15
-  x_max_queries: 5
-  # صفحه‌های چرخشی و آرشیوی «خبر واحد» نیستند: با هر به‌روزرسانی دوباره ثبت
-  # می‌شوند و متن‌شان آن‌قدر متنوع است که تقریباً هر فیلتری را رد می‌کند.
-  # نکته: «/blog/» نباید اینجا باشد چون Flightradar24 و OPSGROUP زیر /blog/ مقاله منتشر می‌کنند.
+  x_max_queries: 6
+  # صفحه‌های چرخشی و آرشیوی «خبر واحد» نیستند؛ URLهای شاخص‌شان حذف می‌شود.
+  # /blog/ عمداً اینجا نیست چون منابع هوانوردی زیر /blog/ مقاله‌های واقعی دارند.
   skip_url_parts:
     - /live-blog
     - /liveblog
@@ -32,6 +31,26 @@ poll:
     - /tag/
     - /topic/
     - /author/
+
+# جست‌وجوی شبکه‌های اجتماعی؛ دامنه عمداً ایران‌محور و کلیدواژه‌محور است.
+social:
+  auto_discover_hashtags: true
+  hashtag_min_mentions: 2
+  hashtag_min_sources: 2
+  hashtag_window_days: 30
+  max_discovered_hashtags: 24
+  seed_hashtags:
+    - IranAirspace
+    - TehranFIR
+    - IranFlights
+    - IranAviation
+    - پرواز_ایران
+    - حریم_هوایی_ایران
+    - فرودگاه_تهران
+    - لغو_پرواز_ایران
+  x_keyword_queries:
+    - '(Iran OR Iranian OR Tehran OR IKA OR OIIE OR OIII OR OIIX) (flight OR flights OR airline OR airport OR airspace OR NOTAM OR runway OR route) -is:retweet -is:reply'
+    - '(ایران OR ایرانی OR تهران OR IKA OR OIIE OR OIII OR OIIX) (پرواز OR فرودگاه OR حریم_هوایی OR لغو_پرواز OR تأخیر_پرواز OR مسیر_پروازی) -is:retweet -is:reply'
 
 # ── NOTAM ────────────────────────────────────────────────────
 # کالکتور NOTAM سازمان هوانوردی آمریکا (FAA) کنار گذاشته شده است: کلید API
@@ -54,13 +73,14 @@ health:
   stale_seconds: 300
 
 # ── فیلتر ربط ────────────────────────────────────────────────
-# یک آیتم باید هم به ایران اشاره کند و هم زمینه‌ی هوانوردی داشته باشد.
-# فقط «ایران» کافی نیست، وگرنه خبر ورزشی و شهری هم رد می‌شود.
+# هر خبر باید به ایران مرتبط باشد و نشانه‌ی مشخصی از خدمت/عملیات هوایی داشته باشد.
+# سیگنال‌ها باید در تیتر یا ابتدای لید نزدیک باشند؛ هم‌وقوعی دور از هم کافی نیست.
 relevance:
   airport_codes: [OIIE, OIII, OIIX, IKA, THR]
   # فقط همین مقدار از متن برای سنجش ربط بررسی می‌شود. صفحه‌های بسیار بلند
   # (لایووبلاگ، گزارش جامع) به‌طور تصادفی کلمه‌ی ایران و هوانوردی را کنار هم دارند.
   max_match_chars: 1200
+  relevance_window_chars: 420
   keywords:
     # فقط نام‌ها و مکان‌های ایران. اصطلاحات هوانوردی جای دیگری هستند؛
     # وگرنه هر خبر «حریم هوایی» در دنیا به ایران وصل می‌شود.
@@ -70,7 +90,9 @@ relevance:
     ru: [иран, тегеран, мехрабад, "имам хомейни"]
     ar: [إيران, ايران, طهران, مهرآباد, "الإمام الخميني"]
     zh: [伊朗, 德黑兰, 梅赫拉巴德, 伊玛目霍梅尼]
-  aviation_keywords:
+  # نشانه‌های مشخص خدمات/عملیات هوایی؛ «هواپیما/هوانوردی» به‌تنهایی کافی نیست.
+  # این واژه‌ها باید نزدیک به اشاره‌ی ایران، ایرلاین ایرانی یا فرودگاه ایران باشند.
+  service_keywords:
     - flight
     - flights
     - airline
@@ -78,168 +100,198 @@ relevance:
     - airport
     - airports
     - airspace
-    - notam
-    - fir
+    - "air space"
+    - NOTAM
+    - FIR
     - runway
-    - aircraft
-    - aviation
+    - route
+    - routes
     - overflight
-    - passenger
+    - "ground stop"
+    - "air traffic"
+    - "flight service"
+    - "airline service"
+    - "flight operations"
+    - "flight cancellation"
+    - "flight cancellations"
+    - "cancellation of flights"
+    - "flight cancelled"
+    - "flight canceled"
+    - "cancelled flight"
+    - "canceled flight"
+    - "flights cancelled"
+    - "flights canceled"
+    - "cancelled flights"
+    - "canceled flights"
+    - "flight delay"
+    - "flight delays"
+    - "flight delayed"
+    - "flights delayed"
+    - "delayed flights"
+    - "passenger flight"
+    - "passenger flights"
+    - "passenger service"
+    - "flights suspended"
+    - "suspends flights"
+    - "suspended flights"
+    - "rerouted flights"
+    - "reroute flights"
+    - "flight diversion"
+    - "flight diverted"
     - پرواز
+    - پروازها
     - هواپیمایی
-    - هواپیما
+    - ایرلاین
     - فرودگاه
     - باند
-    - حریم هوایی
-    - مسافر
+    - "حریم هوایی"
+    - "مسیر پروازی"
+    - "لغو پرواز"
+    - "لغو پروازها"
+    - "تأخیر پرواز"
+    - "تاخیر پرواز"
+    - "تغییر مسیر پرواز"
     - uçuş
+    - uçuşlar
     - havayolu
     - havalimanı
     - "hava sahası"
-    - авиа
+    - "uçuş iptali"
+    - "uçuşlar iptal"
+    - "uçuş gecikmesi"
+    - sefer
+    - seferler
+    - seferlerini
     - рейс
-    - самолет
+    - авиакомпания
     - аэропорт
-    - воздушн
+    - "воздушное пространство"
+    - "рейсы отменены"
+    - "задержка рейса"
     - طيران
     - رحلة
     - مطار
     - "المجال الجوي"
+    - "إلغاء الرحلات"
+    - "تأخير الرحلات"
     - 航班
     - 航空
     - 机场
     - 领空
-  # عبارت‌های فنی که به‌تنهایی برای تأیید ربط کافی‌اند.
-  # «پرواز» تنها ضعیف است (خبر ورزشی: «پرواز تیم ملی به فینال»).
-  strong_aviation_keywords:
-    - airline
-    - airlines
-    - airports
+  # سیگنال‌های مستقیم عملیاتی که برچسب خبر ورزشی/عمومی را خنثی می‌کنند.
+  direct_service_keywords:
     - airspace
-    - notam
-    - fir
+    - "air space"
+    - NOTAM
+    - FIR
     - runway
-    - aircraft
-    - aviation
     - overflight
     - "ground stop"
-    - "air force"
-    - airbase
-    - "air base"
-    - "no-fly zone"
-    - "cancel flights"
+    - "airspace closure"
+    - "airspace closed"
+    - "closed airspace"
+    - "airport closure"
+    - "airport closed"
+    - "airport reopened"
+    - "airport operations"
+    - "flight route"
+    - "flight routes"
+    - "airline route"
+    - "airline routes"
+    - "flight cancellation"
+    - "flight cancellations"
+    - "cancellation of flights"
+    - "flight cancelled"
+    - "flight canceled"
     - "flights cancelled"
-    - "flights suspended"
     - "flights canceled"
-    - فرودگاه
-    - هواپیمایی
-    - هواپیما
+    - "cancelled flights"
+    - "canceled flights"
+    - "cancels flights"
+    - "suspends flights"
+    - "suspended flights"
+    - "flights suspended"
+    - "flight delay"
+    - "flight delays"
+    - "flight delayed"
+    - "flights delayed"
+    - "delayed flights"
+    - "rerouted flights"
+    - "flights rerouted"
+    - "flight rerouted"
+    - "flight diversion"
+    - "flight diverted"
+    - بستن حریم
+    - "حریم هوایی"
     - باند
-    - حریم هوایی
+    - "مسیر پروازی"
     - "لغو پرواز"
     - "لغو پروازها"
     - "تأخیر پرواز"
-    - havayolu
-    - havalimanı
+    - "تاخیر پرواز"
+    - "تغییر مسیر پرواز"
+    - "فرودگاه بسته"
+    - "پروازها لغو"
+    - havalimanı kapat
     - "hava sahası"
-    - авиакомпания
-    - аэропорт
-    - самолет
-    - "рейсы отменены"
-    - طيران
-    - مطار
-    - "المجال الجوي"
-    - 航空
-    - 机场
-    - 领空
-  # عبارت‌های منطقه‌ای: «امارات پروازهای خاورمیانه را متوقف کرد»
-  # عمداً «gulf» تنها نیست: با «Gulf Air» و «Gulfstream» قاطی می‌شود.
-  region_keywords:
-    - middle east
-    - persian gulf
-    - "strait of hormuz"
-    - hormuz
-    - خاورمیانه
-    - خلیج فارس
-    - تنگه هرمز
-    - hürmüz
-    - orta doğu
-    - "ближний восток"
-    - "персидский залив"
-    - "الشرق الأوسط"
-    - "الخليج العربي"
-    - "مضيق هرمز"
-    - 中东
-    - 波斯湾
-    - 霍尔木兹
-  # قانون منطقه فقط با این عبارت‌ها فعال می‌شود — نه با «airline» یا «airport».
-  # بدون این محدودیت، هر خبر ایرلاین در خاورمیانه مثبت کاذب می‌شود
-  # (مثلاً «Qatar Airways to fly to Western Sydney airport»).
-  airspace_signal_keywords:
-    - airspace
-    - "air space"
-    - notam
-    - fir
-    - overflight
-    - "air corridor"
-    - reroute
-    - rerouted
-    - diverted
-    - "no-fly zone"
-    - "ground stop"
-    - "airspace closed"
-    - "closed airspace"
-    - "closure of airspace"
-    - "flights suspended"
-    - "flights cancelled"
-    - "flights canceled"
-    - "suspends flights"
-    - "cancels flights"
-    - "canceled flights"
-    - "cancelled flights"
-    - حریم هوایی
-    - "بستن حریم"
-    - "لغو پرواز"
-    - "لغو پروازها"
-    - "تغییر مسیر"
-    - "مسیر پرواز"
-    - hava sahası
     - "uçuşlar iptal"
+    - "uçuş gecikmesi"
     - "воздушное пространство"
     - "рейсы отменены"
-    - "المجال الجوي"
+    - "задержка рейса"
+    - "إغلاق المجال الجوي"
     - "إلغاء الرحلات"
-    - 领空
+    - "تأخير الرحلات"
     - 航班取消
-
-  # اگر true شود، خبرهای «ایران + جنگ/حمله/موشک/تحریم» هم به‌عنوان «زمینه»
-  # منتشر می‌شوند. پیش‌فرض خاموش است، چون حجمشان زیاد و ربطشان غیرمستقیم است.
-  include_iran_conflict_context: false
-  conflict_keywords:
-    - war
-    - strike
-    - missile
-    - attack
+    - 领空关闭
+  non_aviation_title_keywords:
     - military
-    - sanctions
-    - hormuz
-    - جنگ
-    - حمله
-    - موشک
+    - "air force"
+    - warplane
+    - fighter
+    - fighters
+    - army
+    - defense
+    - "defence"
+    - football
+    - soccer
+    - tournament
+    - "world cup"
+    - match
+    - team
+    - final
+    - league
+    - coach
     - نظامی
-    - تحریم
-    - هرمز
-    - война
-    - удар
-    - ракет
-    - санкции
-    - savaş
-    - füze
-    - حرب
-    - صاروخ
-    - 战争
-    - 导弹
-
+    - "نیروی هوایی"
+    - جنگنده
+    - پهپاد
+    - askeri
+    - "hava kuvvetleri"
+    - "военно-воздушные"
+    - военные
+    - "القوات الجوية"
+    - عسكري
+    - 空军
+    - 军方
+    - فوتبال
+    - "تیم ملی"
+    - جام
+    - فینال
+    - لیگ
+    - مسابقه
+    - مربی
+    - futbol
+    - takım
+    - maç
+    - liga
+    - футбол
+    - матч
+    - команда
+    - финал
+    - الدوري
+    - مباراة
+    - فريق
 # ── دسته‌بندی ────────────────────────────────────────────────
 categories:
   airspace:

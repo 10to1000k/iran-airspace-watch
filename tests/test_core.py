@@ -63,6 +63,23 @@ class UtilTests(unittest.TestCase):
         self.assertEqual(util.g2j(2025, 3, 20), (1403, 12, 30))
 
 
+class SocialTextTests(unittest.TestCase):
+    def test_hashtags_normalize_and_filter_generic_noise(self):
+        from src.social import extract_hashtags
+
+        self.assertEqual(
+            extract_hashtags("#IranAirspace #حریم‌هوایی_ایران #airspace #news #12345"),
+            ["iranairspace", "حریم_هوایی_ایران"],
+        )
+
+    def test_hashtags_expand_for_classifier(self):
+        from src.social import expand_hashtags
+
+        expanded = util.normalize(expand_hashtags("#IranAirspace #حریم_هوایی"))
+        self.assertIn("iran airspace", expanded)
+        self.assertIn("حریم هوایی", expanded)
+
+
 class ClassifierTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -106,6 +123,33 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_sports_team_mentioning_an_airport_is_not_a_service_update(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran football team reaches the final",
+                "Fans and players arrive at the airport before the match.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_generic_cancellation_language_is_not_an_air_service_signal(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iranian football final cancelled after a dispute",
+                "The tournament was cancelled, and the team will return tomorrow.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_military_flight_testing_is_not_civil_air_service(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran Air Force conducts flight tests",
+                "Military crews tested a new fighter aircraft.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
     def test_political_iran_news_without_aviation_is_irrelevant(self):
         result = self.classifier.classify(
             self.item(
@@ -130,6 +174,9 @@ class ClassifierTests(unittest.TestCase):
         index = AirlineIndex(self.config.airlines)
         self.assertEqual(index.match("What I saw today is nothing new"), [])
         self.assertEqual(index.match("THY cancelled its flights"), ["Turkish Airlines"])
+        self.assertEqual(index.match("Iran airspace is closed"), [])
+        self.assertNotIn("Iran Air", index.match("Iran Air Force performs a drill"))
+        self.assertIn("Iran Air", index.match("Iran Air adds flights to Tehran"))
 
     def test_airline_route_news_outside_region_is_not_relevant(self):
         """مثبت کاذب واقعی: قطر ایرویز به سیدنی — نه ایران، نه حریم هوایی."""
@@ -143,11 +190,20 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
-    def test_airline_airspace_suspension_in_region_is_relevant(self):
+    def test_airline_airspace_news_must_explicitly_involve_iran(self):
         result = self.classifier.classify(
             self.item(
                 "Emirates suspends flights across Middle East airspace",
                 "The airline cancelled flights after airspace closures in the region.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_airline_airspace_news_that_mentions_iran_is_relevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "Emirates suspends flights across Middle East airspace",
+                "Iranian airspace restrictions forced the airline to reroute flights.",
             )
         )
         self.assertTrue(result.relevant)
@@ -170,6 +226,13 @@ class ClassifierTests(unittest.TestCase):
             )
         )
         self.assertTrue(result.relevant)
+
+    def test_iranian_airline_alias_is_nearby_even_without_canonical_name(self):
+        result = self.classifier.classify(
+            self.item("ماهان پروازهای بیشتری به گوانگژو برقرار می‌کند")
+        )
+        self.assertTrue(result.relevant)
+        self.assertIn("Mahan Air", result.airlines)
 
     def test_foreign_airline_route_without_iran_stays_irrelevant(self):
         result = self.classifier.classify(
@@ -221,13 +284,39 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_iran_and_flight_terms_far_apart_in_lead_are_rejected(self):
+        filler = "The report discusses trade and budget negotiations. " * 7
+        result = self.classifier.classify(
+            self.item(
+                "Iran announces a new economic policy",
+                filler + "Airlines continue normal flights across Asia.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_irrelevant_indonesia_political_story_is_rejected(self):
+        result = self.classifier.classify(
+            self.item(
+                "Big dreams, growing pains in Indonesia: Prabowo’s turbulent 2 years in power",
+                "The political report mentions Iran sanctions and a military aircraft parade.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_iran_airspace_hashtags_are_expanded_for_matching(self):
+        result = self.classifier.classify(
+            self.item("#IranAirspace closes after #پرواز_ایران cancellations")
+        )
+        self.assertTrue(result.relevant)
+        self.assertEqual(result.category, "airspace")
+
     def test_conflict_context_is_off_by_default(self):
         result = self.classifier.classify(
             self.item("Iran warns of stronger response to any new attack", "military drills")
         )
         self.assertFalse(result.relevant)
 
-    def test_conflict_context_can_be_enabled(self):
+    def test_legacy_conflict_flag_does_not_bypass_aviation_scope(self):
         import copy
 
         from src.config import Config
@@ -240,12 +329,10 @@ class ClassifierTests(unittest.TestCase):
             airlines=self.config.airlines,
             glossary=self.config.glossary,
         )
-        classifier = Classifier(cfg)
-        result = classifier.classify(
+        result = Classifier(cfg).classify(
             self.item("Iran warns of stronger response to any new attack", "military drills")
         )
-        self.assertTrue(result.relevant)
-        self.assertEqual(result.category, "context")
+        self.assertFalse(result.relevant)
 
     def test_persian_cancellation_is_relevant(self):
         result = self.classifier.classify(
@@ -305,6 +392,160 @@ class CollectorTests(unittest.TestCase):
         config = load_config(dry_run=True)
         jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
         self.assertEqual([job.name for job in jobs], ["rss"])
+
+
+    def test_x_collector_uses_official_api_and_parses_recent_posts(self):
+        import os
+        from unittest import mock
+
+        from src.airlines import AirlineIndex
+        from src.collectors import XCollector
+
+        with mock.patch.dict(
+            os.environ,
+            {"ENABLE_X": "true", "X_BEARER_TOKEN": "test-bearer"},
+        ):
+            config = load_config()
+            config.settings["poll"]["x_max_queries"] = 1
+            collector = XCollector(config, AirlineIndex(config.airlines))
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+            class FakeResponse:
+                status_code = 200
+
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {
+                        "data": [{
+                            "id": "123",
+                            "text": "Iranian airspace #IranAirspace flight notice",
+                            "author_id": "u1",
+                            "created_at": now,
+                            "lang": "en",
+                            "public_metrics": {"like_count": 7, "retweet_count": 2},
+                        }],
+                        "includes": {"users": [{"id": "u1", "username": "aviation_watch"}]},
+                    }
+
+            with mock.patch("src.collectors.requests.get", return_value=FakeResponse()) as get:
+                items = collector.poll()
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].kind, "x")
+        self.assertEqual(items[0].source_id, "x_aviation_watch")
+        self.assertEqual(items[0].url, "https://x.com/aviation_watch/status/123")
+        self.assertEqual(items[0].extra["likes"], 7)
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-bearer")
+
+    def test_telegram_bot_receives_posts_only_from_configured_channels(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from src.db import Database
+        from src.telegram_bot import TelegramBot
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "TELEGRAM_BOT_TOKEN": "123456:test-token",
+                "ENABLE_TELEGRAM_CHANNELS": "true",
+                "TELEGRAM_CHANNELS": "iranaviation",
+            },
+        ):
+            config = load_config()
+            db = Database(Path(tmp) / "tg.db")
+            try:
+                bot = TelegramBot(config, db)
+                sent = []
+                bot.send = lambda text, chat_id=None, **kwargs: sent.append((text, chat_id))
+                bot._handle_update({"message": {
+                    "chat": {"id": 123},
+                    "text": "/hashtags",
+                }})
+                self.assertEqual(sent[0][1], "123")
+                self.assertIn("#IranAirspace", sent[0][0])
+                now = int(datetime.now(timezone.utc).timestamp())
+                bot._handle_update({"channel_post": {
+                    "chat": {
+                        "id": -100123,
+                        "type": "channel",
+                        "title": "Iran Aviation",
+                        "username": "iranaviation",
+                    },
+                    "message_id": 42,
+                    "date": now,
+                    "text": "پروازها در تهران بررسی می‌شوند #پرواز_ایران",
+                }})
+                bot._handle_update({"channel_post": {
+                    "chat": {"id": -100456, "type": "channel", "username": "other"},
+                    "message_id": 43,
+                    "date": now,
+                    "text": "unconfigured channel post",
+                }})
+                db.close()
+                db = Database(Path(tmp) / "tg.db")
+                bot = TelegramBot(config, db)
+                items = bot.poll_channel_posts()
+                self.assertEqual(len(items), 1)
+                bot.ack_channel_post(items[0].extra["telegram_inbox_id"])
+                self.assertEqual(bot.poll_channel_posts(), [])
+            finally:
+                db.close()
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source_id, "tg_iranaviation")
+        self.assertEqual(items[0].url, "https://t.me/iranaviation/42")
+        self.assertEqual(items[0].kind, "telegram")
+
+
+    def test_channel_post_is_persisted_before_update_offset_advances(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from src.db import Database
+        from src.telegram_bot import TelegramBot
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "TELEGRAM_BOT_TOKEN": "123456:test-token",
+                "ENABLE_TELEGRAM_CHANNELS": "true",
+                "TELEGRAM_CHANNELS": "iranaviation",
+            },
+        ):
+            config = load_config()
+            db = Database(Path(tmp) / "offset.db")
+            try:
+                bot = TelegramBot(config, db)
+                update = {
+                    "update_id": 77,
+                    "channel_post": {
+                        "chat": {"id": -100123, "type": "channel", "username": "iranaviation"},
+                        "message_id": 42,
+                        "date": int(datetime.now(timezone.utc).timestamp()),
+                        "text": "Iran airspace restrictions affect flights #IranAirspace",
+                    },
+                }
+
+                def fake_call(method, payload, **kwargs):
+                    self.assertEqual(method, "getUpdates")
+                    self.assertIn("channel_post", payload["allowed_updates"])
+                    bot._stop.set()
+                    return [update]
+
+                with mock.patch.object(bot, "_call", side_effect=fake_call):
+                    bot._listen_loop()
+
+                self.assertEqual(db.kv_get("tg_offset"), "78")
+                items = bot.poll_channel_posts()
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0].extra["telegram_inbox_id"], "tg-update:77")
+            finally:
+                db.close()
 
 
 class HealthTests(unittest.TestCase):
@@ -535,6 +776,100 @@ class PipelineRecoveryTests(unittest.TestCase):
                 sent = pipeline.flush_unsent()
                 self.assertEqual(sent, 1)
                 self.assertEqual(len(db.unsent_events()), 0)
+            finally:
+                db.close()
+
+
+class SocialStorageTests(unittest.TestCase):
+    def test_discovered_hashtag_requires_repeated_independent_sources(self):
+        import tempfile
+
+        from src.db import Database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "tags.db")
+            try:
+                db.record_hashtags(["iranairspace"], "x_author_a", "fp-1")
+                db.record_hashtags(["iranairspace"], "x_author_a", "fp-2")
+                self.assertEqual(
+                    db.discovered_hashtags(min_mentions=2, min_sources=2), []
+                )
+                db.record_hashtags(["iranairspace"], "tg_channel_b", "fp-3")
+                self.assertEqual(
+                    db.discovered_hashtags(min_mentions=2, min_sources=2),
+                    ["iranairspace"],
+                )
+            finally:
+                db.close()
+
+
+    def test_x_queries_include_fixed_seeds_and_confirmed_hashtags(self):
+        import tempfile
+
+        from src.airlines import AirlineIndex
+        from src.collectors import XCollector
+        from src.db import Database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = load_config()
+            db = Database(Path(tmp) / "queries.db")
+            try:
+                db.record_hashtags(["iranaviationupdate"], "x_account_a", "fp-a")
+                db.record_hashtags(["iranaviationupdate"], "tg_channel_b", "fp-b")
+                queries = XCollector(config, AirlineIndex(config.airlines), db).queries()
+            finally:
+                db.close()
+
+        self.assertIn("#IranAirspace", queries[2])
+        self.assertIn("#iranaviationupdate", queries[3])
+
+    def test_pipeline_learns_tags_only_from_relevant_social_posts(self):
+        import tempfile
+
+        from src.db import Database
+        from src.models import Translation
+        from src.pipeline import Pipeline
+
+        class FakeBot:
+            def feedback_keyboard(self, event_id, url=""):
+                return []
+
+            def send(self, text, **kwargs):
+                return None
+
+            def chat_id(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = load_config(dry_run=True)
+            db = Database(Path(tmp) / "pipeline.db")
+            try:
+                pipeline = Pipeline(config, db, FakeBot())
+                pipeline.translator.translate_item = lambda **kwargs: Translation(
+                    text_fa=kwargs["body"], engine="test", title_fa=kwargs["title"]
+                )
+                irrelevant = RawItem(
+                    source_id="x_account_a",
+                    source_name="@account_a",
+                    source_url="https://x.com/account_a",
+                    title="Iranian minister discusses regional policy #politicsupdate",
+                    body="Officials discussed political relations and a new policy proposal.",
+                    url="https://x.com/account_a/status/100",
+                    kind="x",
+                )
+                relevant = RawItem(
+                    source_id="x_account_a",
+                    source_name="@account_a",
+                    source_url="https://x.com/account_a",
+                    title="Iran airspace restrictions affect flights #IranAirspace #SkyRouteUpdate",
+                    body="Iran airspace restrictions affect flights.",
+                    url="https://x.com/account_a/status/101",
+                    kind="x",
+                )
+                self.assertEqual(pipeline.process(irrelevant), "irrelevant")
+                self.assertIn(pipeline.process(relevant), {"published", "queued"})
+                tags = db.discovered_hashtags(min_mentions=1, min_sources=1)
+                self.assertEqual(set(tags), {"iranairspace", "skyrouteupdate"})
             finally:
                 db.close()
 

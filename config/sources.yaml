@@ -101,7 +101,7 @@ sources:
   - {id: me_aljazeera,name: Al Jazeera,      type: rss, url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, country: INTL, tier: 2}
   - {id: me_mee,      name: Middle East Eye, type: rss, url: "https://www.middleeasteye.net/rss", lang: en, country: INTL, tier: 2}
 
-# کانال‌های تلگرامی (نیاز به TELEGRAM_API_ID/HASH و نصب telethon)
-# بات باید عضو کانال باشد؛ برای کانال خصوصی، دعوت دستی لازم است.
+# کانال‌های تلگرام از Bot API دریافت می‌شوند. بات را در کانال‌های عمومی ادمین کن.
+# می‌توانی نام کاربری‌ها را هم بدون ویرایش این فایل در TELEGRAM_CHANNELS بنویسی.
 telegram_channels:
   - {id: tg_example, name: "نمونه", username: "", enabled: false}

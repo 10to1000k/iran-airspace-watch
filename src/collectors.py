@@ -1,15 +1,12 @@
-"""کالکتورها: RSS، کانال‌های تلگرام، و توییتر.
+"""کالکتورها: RSS، کانال‌های تلگرام، و X API رسمی.
 
 همه یک قرارداد دارند: poll() -> list[RawItem]
 """
 
 from __future__ import annotations
 
-import asyncio
 import calendar
 import logging
-import queue
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -154,175 +151,148 @@ def _entry_body(entry) -> str:
 
 
 class TelegramChannelCollector:
-    """کانال‌های تلگرام به‌صورت رویدادمحور (تأخیر ۱ تا ۵ ثانیه).
+    """برداشت پست کانال از صندوق بادوامی که getUpdates بات پر می‌کند.
 
-    نیاز به `telethon` و TELEGRAM_API_ID/HASH دارد. بات باید عضو کانال باشد.
+    Bot API فقط پست کانال‌هایی را می‌دهد که خود بات به آن‌ها اضافه شده باشد؛
+    این کار به حساب کاربری/اسکرپینگ Telethon نیاز ندارد.
     """
 
-    def __init__(self, config):
-        self.cfg = config
-        self.queue: queue.Queue[RawItem] = queue.Queue()
-        self._thread: threading.Thread | None = None
-        self.enabled = _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS") and bool(config.telegram_channels)
-
-    def start(self) -> None:
-        if not self.enabled:
-            return
-        try:
-            import telethon  # noqa: F401
-        except ImportError:
-            log.warning("telethon نصب نیست — کالکتور تلگرام غیرفعال شد")
-            self.enabled = False
-            return
-        self._thread = threading.Thread(target=self._run, name="telegram-collector", daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        try:
-            asyncio.run(self._main())
-        except Exception as exc:  # noqa: BLE001
-            log.error("کالکتور تلگرام متوقف شد: %s", exc)
-
-    async def _main(self) -> None:
-        from telethon import TelegramClient, events
-
-        api_id = int(self.cfg.env_get("TELEGRAM_API_ID", "0") or 0)
-        api_hash = self.cfg.env_get("TELEGRAM_API_HASH", "") or ""
-        session = self.cfg.env_get("TELEGRAM_SESSION", "data/telegram") or "data/telegram"
-        if not api_id or not api_hash:
-            log.warning("TELEGRAM_API_ID/HASH تنظیم نشده — کالکتور تلگرام غیرفعال")
-            return
-
-        client = TelegramClient(session, api_id, api_hash)
-        channels = [c["username"] for c in self.cfg.telegram_channels]
-        log.info("اتصال به تلگرام برای %d کانال", len(channels))
-
-        @client.on(events.NewMessage(chats=channels))
-        async def handler(event):  # noqa: ANN001
-            message = event.message
-            text = (message.message or "").strip()
-            if not text:
-                return
-            username = getattr(event.chat, "username", None)
-            url = (
-                f"https://t.me/{username}/{message.id}"
-                if username
-                else f"https://t.me/c/{event.chat_id}/{message.id}"
-            )
-            title = text.split("\n", 1)[0][:200]
-            body = util.truncate(text, 1200)
-            self.queue.put(
-                RawItem(
-                    source_id=f"tg_{username or event.chat_id}",
-                    source_name=getattr(event.chat, "title", "Telegram"),
-                    source_url=f"https://t.me/{username}" if username else "",
-                    title=title,
-                    body=body,
-                    url=url,
-                    lang="fa",
-                    country="INTL",
-                    kind="telegram",
-                    published_at=message.date.astimezone(timezone.utc) if message.date else util.now_utc(),
-                    extra={"tier": 1},
-                )
-            )
-
-        await client.start()
-        await client.run_until_disconnected()
+    def __init__(self, config, bot=None):
+        self.bot = bot
+        self.channels = config.telegram_channels
+        self.enabled = (
+            _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS")
+            and bool(self.channels)
+            and bool(bot and bot.listener_enabled)
+        )
+        if _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS") and self.channels and not self.enabled:
+            log.warning("پایش تلگرام نیازمند TELEGRAM_BOT_TOKEN و شنونده‌ی Bot API فعال است")
 
     def poll(self) -> list[RawItem]:
-        items: list[RawItem] = []
-        while True:
-            try:
-                items.append(self.queue.get_nowait())
-            except queue.Empty:
-                break
-        return items
+        return self.bot.poll_channel_posts() if self.enabled else []
 
 
 class XCollector:
-    """جست‌وجوی توییتر با twscrape.
+    """جست‌وجوی رسمی X API v2؛ نیازمند X_BEARER_TOKEN و دسترسی recent search است."""
 
-    ⚠️ خلاف شرایط سرویس X است و می‌تواند حساب/آی‌پی را مسدود کند.
-    پیش‌فرض خاموش است. مسئولیتش با کسی است که فعالش می‌کند.
-    """
+    SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
 
-    def __init__(self, config, airline_index):
+    def __init__(self, config, airline_index, db=None):
         self.cfg = config
         self.airlines = airline_index
-        self.enabled = _flag_direct(config, "ENABLE_X")
-        self.accounts = [a for a in (config.env_get("X_ACCOUNTS", "") or "").split(",") if a]
-        self._api = None
+        self.db = db
+        self.token = config.env_get("X_BEARER_TOKEN", "") or ""
+        self.enabled = _flag_direct(config, "ENABLE_X") and bool(self.token)
+        if _flag_direct(config, "ENABLE_X") and not self.token:
+            log.warning("ENABLE_X=true است ولی X_BEARER_TOKEN تنظیم نشده؛ جست‌وجوی X خاموش ماند")
 
     def queries(self) -> list[str]:
-        watch = [
-            a for a in self.cfg.airlines
-            if a.get("country") in {"TR", "AE", "RU", "CN"}
-        ][: int(self.cfg.get("poll.x_max_queries", 5))]
-        out = []
-        for airline in watch:
-            name = airline["name"]
-            out.append(
-                f'("{name}" OR "{airline.get("iata", "")}") '
-                '(Iran OR Tehran OR IKA OR THR OR OIIX OR airspace) -filter:replies'
+        limit = max(1, int(self.cfg.get("poll.x_max_queries", 5)))
+        queries = [
+            str(query).strip()
+            for query in (self.cfg.get("social.x_keyword_queries", []) or [])
+            if str(query).strip()
+        ]
+        seed_tags = list(self.cfg.get("social.seed_hashtags", []) or [])
+        dynamic_tags: list[str] = []
+        if self.db and self.cfg.get("social.auto_discover_hashtags", True):
+            dynamic_tags = self.db.discovered_hashtags(
+                min_mentions=int(self.cfg.get("social.hashtag_min_mentions", 2)),
+                min_sources=int(self.cfg.get("social.hashtag_min_sources", 2)),
+                days=int(self.cfg.get("social.hashtag_window_days", 30)),
+                limit=int(self.cfg.get("social.max_discovered_hashtags", 24)),
             )
-        out.append('(OIIE OR OIII OR OIIX OR "Tehran FIR") (closed OR NOTAM OR airspace) -filter:replies')
-        return out
+
+        def hashtag_query(tags: list[str]) -> str:
+            terms = [f"#{tag.lstrip('#')}" for tag in tags if tag]
+            return f"({' OR '.join(terms)}) -is:retweet -is:reply" if terms else ""
+
+        seed_query = hashtag_query(seed_tags)
+        if seed_query:
+            queries.append(seed_query)
+        # هشتگ‌های کشف‌شده بعد از queryهای ثابت می‌آیند تا هیچ فهرست ثابتی حذف نشود.
+        for offset in range(0, len(dynamic_tags), 8):
+            query = hashtag_query(dynamic_tags[offset:offset + 8])
+            if query:
+                queries.append(query)
+        return list(dict.fromkeys(queries))[:limit]
 
     def poll(self) -> list[RawItem]:
         if not self.enabled:
             return []
-        if not self.accounts:
-            log.warning("ENABLE_X=true است ولی X_ACCOUNTS خالی است")
-            return []
-        try:
-            return asyncio.run(self._poll_once())
-        except Exception as exc:  # noqa: BLE001
-            log.warning("جست‌وجوی X ناموفق: %s", exc)
-            return []
-
-    async def _poll_once(self) -> list[RawItem]:
-        from twscrape import API, gather
-
-        api = API("data/x_accounts.db")
-        if not self._api:
-            for line in self.accounts:
-                parts = line.split(":")
-                if len(parts) >= 4:
-                    try:
-                        await api.pool.add_account(parts[0], parts[1], parts[2], ":".join(parts[3:]))
-                    except Exception as exc:  # noqa: BLE001
-                        log.debug("افزودن اکانت X ناموفق: %s", exc)
-            await api.pool.login_all()
-            self._api = api
-
-        cutoff = util.now_utc() - timedelta(hours=2)
+        cutoff = util.now_utc() - timedelta(hours=float(self.cfg.get("poll.max_item_age_hours", 12)))
         out: list[RawItem] = []
+        max_results = max(10, min(100, int(self.cfg.get("social.x_max_results", 25))))
+        params_base = {
+            "max_results": max_results,
+            "tweet.fields": "created_at,lang,public_metrics,author_id,entities",
+            "expansions": "author_id",
+            "user.fields": "username,name",
+        }
         for query in self.queries():
             try:
-                tweets = await gather(self._api.search(query, limit=10))
-            except Exception as exc:  # noqa: BLE001
-                log.debug("کوئری ناموفق: %s", exc)
+                response = requests.get(
+                    self.SEARCH_URL,
+                    params={**params_base, "query": query},
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    timeout=(8.0, 25.0),
+                )
+                if response.status_code == 429:
+                    log.warning("سهمیه‌ی X API تمام شد (429)؛ جست‌وجوی این نوبت متوقف شد")
+                    break
+                if response.status_code in (401, 403):
+                    log.error(
+                        "X API دسترسی را رد کرد (%s)؛ توکن و مجوز recent search را بررسی کن",
+                        response.status_code,
+                    )
+                    break
+                response.raise_for_status()
+                payload = response.json()
+            except requests.RequestException as exc:
+                log.warning("جست‌وجوی X ناموفق شد: %s", exc)
                 continue
-            for tweet in tweets:
-                when = tweet.date.replace(tzinfo=timezone.utc) if tweet.date else None
+            except ValueError as exc:
+                log.warning("پاسخ X API قابل‌خواندن نیست: %s", exc)
+                continue
+
+            users = {
+                str(user.get("id")): user
+                for user in (payload.get("includes", {}).get("users") or [])
+            }
+            for post in payload.get("data") or []:
+                when = None
+                if post.get("created_at"):
+                    try:
+                        when = datetime.fromisoformat(
+                            post["created_at"].replace("Z", "+00:00")
+                        ).astimezone(timezone.utc)
+                    except (TypeError, ValueError):
+                        pass
                 if when and when < cutoff:
                     continue
-                if tweet.retweetedTweet:
+                user = users.get(str(post.get("author_id") or ""), {})
+                username = str(user.get("username") or post.get("author_id") or "unknown")
+                text = str(post.get("text") or "").strip()
+                if not text:
                     continue
+                public = post.get("public_metrics") or {}
                 out.append(
                     RawItem(
-                        source_id=f"x_{tweet.user.username}",
-                        source_name=f"@{tweet.user.username}",
-                        source_url=f"https://x.com/{tweet.user.username}",
-                        title=(tweet.rawContent or "").split("\n", 1)[0][:200],
-                        body=util.truncate(tweet.rawContent or "", 1000),
-                        url=f"https://x.com/{tweet.user.username}/status/{tweet.id}",
-                        lang="en",
+                        source_id=f"x_{username.casefold()}",
+                        source_name=f"@{username}",
+                        source_url=f"https://x.com/{username}",
+                        title=text.splitlines()[0][:200],
+                        body=util.truncate(text, 1000),
+                        url=f"https://x.com/{username}/status/{post.get('id', '')}",
+                        lang=str(post.get("lang") or "en"),
                         country="INTL",
                         kind="x",
                         published_at=when,
-                        extra={"tier": 1, "likes": tweet.likeCount, "reposts": tweet.retweetCount},
+                        extra={
+                            "tier": 1,
+                            "likes": int(public.get("like_count", 0) or 0),
+                            "reposts": int(public.get("retweet_count", 0) or 0),
+                        },
                     )
                 )
         return out
@@ -340,12 +310,11 @@ class CollectorJob:
         self.fn = fn
 
 
-def build_jobs(config, db, airline_index) -> list[CollectorJob]:
+def build_jobs(config, db, airline_index, bot=None) -> list[CollectorJob]:
     rss = RssCollector(config, db)
     notam = NotamCollector(config)
-    telegram = TelegramChannelCollector(config)
-    telegram.start()
-    x = XCollector(config, airline_index)
+    telegram = TelegramChannelCollector(config, bot)
+    x = XCollector(config, airline_index, db)
 
     jobs = [CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll)]
     # فقط کالکتورهایی که واقعاً فعال‌اند زمان‌بندی می‌شوند تا نخ بیکار نسازند
