@@ -34,6 +34,12 @@ spec:
       name: iran-airspace-watch:latest
   triggers:
     - type: ConfigChange
+    # GitHub Actions calls this generic webhook only after the main-branch tests pass.
+    # deploy.ps1 / deploy.sh replace this placeholder with a local, ignored secret.
+    - type: Generic
+      generic:
+        secret: __WEBHOOK_SECRET__
+        allowEnv: false
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 3
 ---

@@ -16,3 +16,4 @@ data/*.json
 Thumbs.db
 backups/
 .deploy-*.rendered.yaml
+.openshift-build-webhook-secret

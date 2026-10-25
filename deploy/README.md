@@ -87,6 +87,28 @@ REPO=https://github.com/USERNAME/iran-airspace-watch.git ./deploy/deploy.sh
 2. `ImageStream` + `BuildConfig` + `PVC` را اعمال می‌کند
 3. ایمیج جدید را داخل کلاستر بیلد می‌کند
 4. `Deployment/airwatch` به همراه `ServiceAccount`، `Role`، `RoleBinding` و **`CronJob/airwatch-keepalive`** را مستقر و ری‌استارت می‌کند
+5. برای `BuildConfig/airwatch` یک Generic webhook امن تنظیم می‌کند و تلاش می‌کند secret لازم GitHub Actions را ثبت کند
+
+### استقرار خودکار بعد از موفقیت تست‌ها
+
+یک‌بار راه‌اندازی اولیه نیاز به ورود معتبر OpenShift دارد. اگر `oc` خطای credential می‌دهد، از Web Console سند جدید `Copy login command` را بگیر و دوباره `oc login` کن؛ GitHub Actions به اطلاعات ورود یا توکن `oc` نیاز نخواهد داشت.
+
+بعد از تنظیم `.env` و لاگین، اسکریپت deploy را اجرا کن. اسکریپت یک کلید تصادفی ۲۵۶بیتی می‌سازد و آن را فقط در فایل محلیِ نادیده‌گرفته‌شده‌ی `.openshift-build-webhook-secret` و BuildConfig ثبت می‌کند. سپس URL webhook را به‌عنوان secret مخزن GitHub با نام زیر تنظیم می‌کند:
+
+```text
+OPENSHIFT_BUILD_WEBHOOK_URL
+```
+
+اگر GitHub CLI (`gh`) نصب و احراز هویت شده باشد، اسکریپت ثبت secret را خودکار امتحان می‌کند. در غیر این صورت (یا اگر دسترسی `gh` کافی نباشد)، URL محرمانه را در پایان نشان می‌دهد؛ آن را در Git یا چت نگذار و در GitHub از مسیر **Settings → Secrets and variables → Actions → New repository secret** دستی ذخیره کن. در PowerShell برای نمایش URL جهت تنظیم دستی می‌توانی `-SkipGitHubSecret` بدهی؛ در Bash نیز نبودن/واردنبودن `gh` به همین روش دستی می‌انجامد.
+
+پس از این راه‌اندازی یک‌باره:
+
+- فقط **push به `main`** که همه‌ی jobهای تست workflow را با موفقیت بگذراند webhook را صدا می‌زند. push به شاخه‌های دیگر، Pull Request و اجرای دستی workflow استقرار نمی‌کنند.
+- BuildConfig کد `main` را با build داخلی OpenShift می‌سازد؛ تغییر ImageStream هم Deployment بات و هم template مربوط به `CronJob` را به‌روز می‌کند. اجرای دستی `oc start-build` و `oc rollout restart` برای انتشار نسخه‌های جدید لازم نیست.
+- BuildConfig، ImageStream، فضای ذخیره‌سازی و `CronJob/airwatch-keepalive` روی همان OpenShift Developer Sandbox باقی می‌مانند؛ میزبانی به سرویس دیگری منتقل نمی‌شود.
+- GitHub فقط webhook URL را به‌صورت Actions secret نگه می‌دارد و هیچ توکن/credential مربوط به OpenShift در GitHub ذخیره نمی‌شود. موفقیت job یعنی OpenShift درخواست build را پذیرفته است؛ نتیجه‌ی خود build را می‌توان در بخش Builds کنسول یا با `oc logs -f bc/airwatch` دید.
+
+اگر sandbox عوض شد یا secret webhook افشا شد، فایل محلی `.openshift-build-webhook-secret` را حذف کن و deploy script را با احراز هویت OpenShift دوباره اجرا کن؛ سپس Actions secret جدید را جایگزین کن.
 
 ## ۵. بررسی وضعیت
 

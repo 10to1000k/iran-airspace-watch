@@ -2107,6 +2107,7 @@ class KeepAliveTests(unittest.TestCase):
 
 class ManifestValidationTests(unittest.TestCase):
     def test_openshift_manifests_are_valid_yaml(self):
+        import json
         import yaml
 
         root = Path(__file__).resolve().parent.parent
@@ -2116,8 +2117,43 @@ class ManifestValidationTests(unittest.TestCase):
             kinds,
             ["Deployment", "ServiceAccount", "Role", "RoleBinding", "CronJob"],
         )
+        deployment = next(doc for doc in app_docs if doc["kind"] == "Deployment")
+        deployment_triggers = json.loads(deployment["metadata"]["annotations"]["image.openshift.io/triggers"])
+        self.assertEqual(deployment_triggers[0]["from"]["name"], "iran-airspace-watch:latest")
+        self.assertEqual(
+            deployment_triggers[0]["fieldPath"],
+            "spec.template.spec.containers[?(@.name==\"bot\")].image",
+        )
+        cronjob = next(doc for doc in app_docs if doc["kind"] == "CronJob")
+        cronjob_triggers = json.loads(cronjob["metadata"]["annotations"]["image.openshift.io/triggers"])
+        self.assertEqual(
+            cronjob_triggers[0]["fieldPath"],
+            "spec.jobTemplate.spec.template.spec.containers[?(@.name==\"keepalive\")].image",
+        )
         build_docs = [d for d in yaml.safe_load_all((root / "deploy/build.yaml").read_text("utf-8")) if d]
         self.assertEqual([doc["kind"] for doc in build_docs], ["ImageStream", "BuildConfig", "PersistentVolumeClaim"])
+
+        build_config = next(doc for doc in build_docs if doc["kind"] == "BuildConfig")
+        self.assertEqual(build_config["spec"]["source"]["git"]["ref"], "main")
+        triggers = build_config["spec"]["triggers"]
+        self.assertIn("ConfigChange", [trigger["type"] for trigger in triggers])
+        generic_trigger = next(trigger for trigger in triggers if trigger["type"] == "Generic")
+        self.assertEqual(generic_trigger["generic"]["secret"], "__WEBHOOK_SECRET__")
+        self.assertFalse(generic_trigger["generic"]["allowEnv"])
+
+        workflow = yaml.load(
+            (root / ".github/workflows/tests.yml").read_text("utf-8"),
+            Loader=yaml.BaseLoader,
+        )
+        self.assertEqual(workflow["on"]["push"]["branches"], ["main"])
+        deploy_job = workflow["jobs"]["deploy"]
+        self.assertEqual(deploy_job["needs"], "test")
+        self.assertIn("github.event_name == 'push'", deploy_job["if"])
+        self.assertIn("github.ref == 'refs/heads/main'", deploy_job["if"])
+        self.assertIn(
+            "${{ secrets.OPENSHIFT_BUILD_WEBHOOK_URL }}",
+            deploy_job["steps"][0]["env"]["OPENSHIFT_BUILD_WEBHOOK_URL"],
+        )
 
 
 if __name__ == "__main__":

@@ -8,12 +8,16 @@
       ۲) ImageStream + BuildConfig + PVC را اعمال می‌کند
       ۳) ایمیج را داخل کلاستر بیلد می‌کند
       ۴) Deployment را مستقر می‌کند و منتظر آماده‌شدن می‌ماند
+      ۵) webhook امن BuildConfig را برای GitHub Actions ثبت می‌کند (بدون توکن OpenShift در GitHub)
 
 .PARAMETER Repo
     آدرس گیت پابلیک. پیش‌فرض: ریموت origin
 
 .PARAMETER SkipBuild
     بیلد را رد کن (وقتی فقط تنظیمات عوض شده)
+
+.PARAMETER SkipGitHubSecret
+    ثبت secret در GitHub را رد کن؛ URL را برای افزودن دستی در انتها نشان می‌دهد.
 
 .EXAMPLE
     .\deploy\deploy.ps1
@@ -25,7 +29,8 @@
 param(
     [string]$Repo = "",
     [string]$Image = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipGitHubSecret
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,10 +81,27 @@ Write-Host "پروژه : $ns"
 Write-Host "ریپو  : $Repo"
 Write-Host "ایمیج : $Image"
 
+# توکن webhook فقط در فایل محلیِ ignoreشده و BuildConfig نگه‌داری می‌شود؛
+# GitHub Actions فقط URL آن را به‌صورت Actions secret دریافت می‌کند، نه توکن oc.
+$webhookSecretFile = Join-Path $root ".openshift-build-webhook-secret"
+if (Test-Path -LiteralPath $webhookSecretFile) {
+    $webhookSecret = [System.IO.File]::ReadAllText($webhookSecretFile).Trim()
+} else {
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = New-Object byte[] 32
+    $rng.GetBytes($bytes)
+    $rng.Dispose()
+    $webhookSecret = ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+    [System.IO.File]::WriteAllText($webhookSecretFile, $webhookSecret, [System.Text.Encoding]::ASCII)
+}
+if ($webhookSecret -notmatch '^[a-f0-9]{64}$') {
+    Fail "محتوای .openshift-build-webhook-secret نامعتبر است؛ فایل محلی را حذف کن تا دوباره ساخته شود."
+}
+
 function Render([string]$Source, [string]$Destination) {
     $path = Join-Path $root $Source
     $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
-    $text = $text.Replace("__REPO__", $Repo).Replace("__IMAGE__", $Image)
+    $text = $text.Replace("__REPO__", $Repo).Replace("__IMAGE__", $Image).Replace("__WEBHOOK_SECRET__", $webhookSecret)
     [System.IO.File]::WriteAllText((Join-Path $root $Destination), $text, $utf8)
 }
 
@@ -106,7 +128,12 @@ Write-Host "   سکرت به‌روز شد" -ForegroundColor DarkGray
 Step "اعمال ImageStream / BuildConfig / PVC"
 Render "deploy/build.yaml" ".deploy-build.rendered.yaml"
 cmd /c "oc apply -f .deploy-build.rendered.yaml"
-if ($LASTEXITCODE -ne 0) { Fail "اعمال منابع بیلد شکست خورد." }
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item ".deploy-build.rendered.yaml" -Force -ErrorAction SilentlyContinue
+    Fail "اعمال منابع بیلد شکست خورد."
+}
+# فایل rendered شامل secret webhook است و بلافاصله پس از apply حذف می‌شود.
+Remove-Item ".deploy-build.rendered.yaml" -Force -ErrorAction SilentlyContinue
 
 # ── بیلد ──────────────────────────────────────────────────────
 if (-not $SkipBuild) {
@@ -140,6 +167,33 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Remove-Item ".deploy-build.rendered.yaml", ".deploy-app.rendered.yaml" -Force -ErrorAction SilentlyContinue
+
+# ── اتصال GitHub Actions به BuildConfig بدون توکن OpenShift ──
+Step "تنظیم trigger استقرار خودکار پس از پاس‌شدن تست‌ها"
+$apiServer = (cmd /c "oc whoami --show-server").Trim().TrimEnd([char[]]@('/'))
+$webhookUrl = "$apiServer/apis/build.openshift.io/v1/namespaces/$ns/buildconfigs/airwatch/webhooks/$webhookSecret/generic"
+$githubRepo = ($Repo -replace '\.git$', '' -replace '^.*github\.com[:/]', '').Trim('/')
+if ($githubRepo -notmatch '^[^/]+/[^/]+$') { $githubRepo = "10to1000k/iran-airspace-watch" }
+$secretConfigured = $false
+
+if (-not $SkipGitHubSecret -and (Get-Command gh -ErrorAction SilentlyContinue)) {
+    $null = gh auth status 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        gh secret set OPENSHIFT_BUILD_WEBHOOK_URL --repo $githubRepo --body $webhookUrl
+        if ($LASTEXITCODE -eq 0) {
+            $secretConfigured = $true
+            Write-Host "   GitHub Actions secret OPENSHIFT_BUILD_WEBHOOK_URL تنظیم شد ($githubRepo)" -ForegroundColor DarkGray
+        } else {
+            Write-Warning "ساخت GitHub secret خودکار ناموفق بود؛ آن را دستی تنظیم کن."
+        }
+    }
+}
+
+if (-not $secretConfigured) {
+    Write-Warning "در GitHub، secret با نام OPENSHIFT_BUILD_WEBHOOK_URL بساز و URL زیر را در آن قرار بده."
+    Write-Host "   Repository: $githubRepo"
+    Write-Host "   URL (محرمانه؛ در چت یا Git نفرست): $webhookUrl" -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "✅ مستقر شد." -ForegroundColor Green

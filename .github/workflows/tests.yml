@@ -27,3 +27,24 @@ jobs:
       - name: Check config and NOTAM decoder
         run: |
           python run.py --decode-notam "A1234/26 NOTAMN Q) OIII/QMXLC/IV/NBO/A/000/999/3541N05119E005 A) OIII B) 2610210600 C) 2610211200 E) RWY 29L CLSD"
+
+  deploy:
+    name: Trigger OpenShift build
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Trigger the OpenShift BuildConfig webhook
+        env:
+          OPENSHIFT_BUILD_WEBHOOK_URL: ${{ secrets.OPENSHIFT_BUILD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$OPENSHIFT_BUILD_WEBHOOK_URL" ]; then
+            echo "Missing repository Actions secret: OPENSHIFT_BUILD_WEBHOOK_URL" >&2
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            --header 'Content-Type: application/json' \
+            --data '{}' "$OPENSHIFT_BUILD_WEBHOOK_URL"
