@@ -652,6 +652,97 @@ class TelegramListenerTests(unittest.TestCase):
         self.assertIn("telegram_bot", health.snapshot()["last_poll_utc"])
 
 
+class MultiRecipientTests(unittest.TestCase):
+    def _msg(self, chat_id, text):
+        return {"message": {"chat": {"id": chat_id}, "text": text}}
+
+    def test_second_start_does_not_evict_first_subscriber(self):
+        import tempfile
+        from unittest import mock
+
+        from src.db import Database
+        from src.telegram_bot import TelegramBot
+
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            try:
+                bot = TelegramBot(config, db)
+                with mock.patch.object(bot, "send", return_value=1) as send:
+                    bot._handle_update(self._msg(111, "/start"))
+                    bot._handle_update(self._msg(222, "/start"))
+
+                self.assertEqual(bot.recipients(), ["111", "222"])
+                self.assertEqual(bot.chat_id(), "111")  # گیرنده‌ی اصلی همان اولی
+
+                with mock.patch.object(bot, "send", return_value=1):
+                    bot._handle_update(self._msg(111, "/stop"))
+                self.assertEqual(bot.recipients(), ["222"])
+                # /stop نفر دوم را دست نمی‌زند
+                self.assertEqual(send.call_count, 2)
+            finally:
+                db.close()
+
+    def test_event_is_broadcast_to_every_recipient(self):
+        import tempfile
+
+        from src.db import Database
+        from src.pipeline import Pipeline
+
+        config = load_config(dry_run=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            try:
+
+                class MultiBot:
+                    configured = True
+
+                    def __init__(self):
+                        self.sent: list[tuple[str, int]] = []
+
+                    def recipients(self):
+                        return ["111", "222"]
+
+                    def chat_id(self):
+                        return "111"
+
+                    def feedback_keyboard(self, event_id, url=""):
+                        return []
+
+                    def send(self, text, chat_id=None, **kwargs):
+                        message_id = 1000 + int(chat_id)
+                        self.sent.append((str(chat_id), message_id))
+                        return message_id
+
+                    def edit(self, *args, **kwargs):
+                        pass
+
+                bot = MultiBot()
+                pipeline = Pipeline(config, db, bot)
+                item = RawItem(
+                    source_id="ir_irna",
+                    source_name="IRNA",
+                    source_url="https://irna.ir/rss",
+                    title="لغو پروازها در فرودگاه مهرآباد تهران",
+                    body="پروازهای مهرآباد موقتاً متوقف شد.",
+                    url="https://irna.ir/news/2001",
+                    lang="fa",
+                    country="IR",
+                )
+                outcome = pipeline.process(item)
+                self.assertEqual(outcome, "published")
+                self.assertEqual(bot.sent, [("111", 1111), ("222", 1222)])
+
+                event = db.latest_events(1)[0]
+                refs = db.message_refs(int(event["id"]))
+                self.assertEqual(refs, {"111": 1111, "222": 1222})
+                # /wrong هر گیرنده روی پیام خودش کار می‌کند
+                self.assertIsNotNone(db.find_event_by_message("222", 1222))
+                self.assertIsNotNone(db.find_event_by_message("111", 1111))
+            finally:
+                db.close()
+
+
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
         from src.formatter import format_publication_notice

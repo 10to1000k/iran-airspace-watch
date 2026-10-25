@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import html
+import json
 import logging
 import threading
 import time
@@ -56,7 +57,79 @@ class TelegramBot:
         return bool(self._thread and self._thread.is_alive())
 
     def chat_id(self, explicit: str | None = None) -> str | None:
-        return explicit or self.cfg.telegram_chat_id or self.db.kv_get("chat_id")
+        """گیرنده‌ی اصلی (اولین شناسه) — برای سازگاری با کدهای قدیمی."""
+        if explicit:
+            return str(explicit)
+        configured = (self.cfg.telegram_chat_id or "").split(",")[0].strip()
+        return configured or self.db.kv_get("chat_id")
+
+    # ── گیرندگان (چندنفره) ────────────────────────────────────
+    def recipients(self) -> list[str]:
+        """همه‌ی گیرنده‌های خبر، به‌ترتیب و بدون تکرار.
+
+        اولویت: شناسه‌های ثابت محیط (TELEGRAM_CHAT_ID، چندتا با کاما)،
+        بعد مشترکانی که با /start ثبت شده‌اند، بعد گیرنده‌ی قدیمی تکی.
+        """
+        ids: list[str] = []
+
+        def add(raw) -> None:
+            for part in str(raw or "").split(","):
+                part = part.strip()
+                if part and part not in ids:
+                    ids.append(part)
+
+        add(self.cfg.telegram_chat_id)
+        try:
+            stored = json.loads(self.db.kv_get("chat_ids", "[]") or "[]")
+        except (ValueError, TypeError):
+            stored = []
+        if isinstance(stored, list):
+            for item in stored:
+                add(item)
+        add(self.db.kv_get("chat_id"))
+        return ids
+
+    def subscribe(self, chat_id: str) -> bool:
+        """ثبت یک مشترک تازه؛ True اگر قبلاً عضو نبوده."""
+        chat_id = str(chat_id)
+        try:
+            stored = json.loads(self.db.kv_get("chat_ids", "[]") or "[]")
+            if not isinstance(stored, list):
+                stored = []
+        except (ValueError, TypeError):
+            stored = []
+        stored = [str(item) for item in stored]
+        is_new = chat_id not in stored and chat_id not in self.recipients()
+        if chat_id not in stored:
+            stored.append(chat_id)
+            self.db.kv_set("chat_ids", json.dumps(stored))
+        # اولین مشترک، گیرنده‌ی «اصلی» قدیمی هم می‌شود تا مسیرهای قدیمی نشکنند
+        if not self.db.kv_get("chat_id"):
+            self.db.kv_set("chat_id", chat_id)
+        return is_new
+
+    def unsubscribe(self, chat_id: str) -> bool:
+        """لغو اشتراک؛ True اگر عضو بوده و حذف شد."""
+        chat_id = str(chat_id)
+        try:
+            stored = json.loads(self.db.kv_get("chat_ids", "[]") or "[]")
+            if not isinstance(stored, list):
+                stored = []
+        except (ValueError, TypeError):
+            stored = []
+        stored = [str(item) for item in stored]
+        was_member = chat_id in stored or self.db.kv_get("chat_id") == chat_id
+        if chat_id in stored:
+            stored.remove(chat_id)
+            self.db.kv_set("chat_ids", json.dumps(stored))
+        if self.db.kv_get("chat_id") == chat_id:
+            remaining = self.recipients()
+            remaining = [item for item in remaining if item != chat_id]
+            if remaining:
+                self.db.kv_set("chat_id", remaining[0])
+            else:
+                self.db.kv_delete("chat_id")
+        return was_member
 
     def _call(self, method: str, payload: dict, timeout: int = 30, retries: int = 3):
         if not self.token:
@@ -282,14 +355,16 @@ class TelegramBot:
         command = text.split()[0].split("@")[0].lower() if text else ""
 
         if command == "/start":
-            self.db.kv_set("chat_id", chat_id)
+            # چندگیرنده: ثبت مشترک تازه، گیرنده‌های قبلی را حذف نمی‌کند
+            self.subscribe(chat_id)
             self.send(
-                "✅ ثبت شد.\nاین بات اخبار حریم هوایی ایران، فرودگاه‌های مهرآباد و امام خمینی "
+                "✅ ثبت شدی.\nاین بات اخبار حریم هوایی ایران، فرودگاه‌های مهرآباد و امام خمینی "
                 "و ایرلاین‌های مرتبط را ۲۴ ساعته رصد می‌کند و همان لحظه برایت می‌فرستد.\n\n"
                 "دستورها:\n"
                 "/status — وضعیت زنده و سلامت منابع\n"
                 "/last — آخرین خبرهای ثبت‌شده\n"
                 "/wrong — روی خبر اشتباه ریپلای کن و بزن تا اصلاح شود\n"
+                "/stop — لغو دریافت خبرها\n"
                 "/help — راهنما",
                 chat_id=chat_id,
             )
@@ -300,13 +375,24 @@ class TelegramBot:
                     log.debug("اجرای callback پس از /start ناموفق بود")
             return
 
+        if command == "/stop":
+            if self.unsubscribe(chat_id):
+                self.send(
+                    "اشتراکت لغو شد؛ دیگر خبری برایت ارسال نمی‌شود. برای ثبت دوباره /start بزن.",
+                    chat_id=chat_id,
+                )
+            else:
+                self.send("اشتراک فعالی نداشتی.", chat_id=chat_id)
+            return
+
         if command in ("/help", "/start@") or command == "/راهنما":
             self.send(
                 "هر خبر همراه با منبع اصلی و برچسب اطمینان می‌آید.\n"
                 "خبرهای هم‌موضوع در یک رشته می‌آیند؛ پیام اول همیشه به‌روز می‌شود.\n"
                 "/status — وضعیت زنده و سلامت فیدها\n"
                 "/last — ۵ رخداد آخر\n"
-                "/wrong — ریپلای روی خبر اشتباه",
+                "/wrong — ریپلای روی خبر اشتباه\n"
+                "/stop — لغو دریافت خبرها",
                 chat_id=chat_id,
             )
             return

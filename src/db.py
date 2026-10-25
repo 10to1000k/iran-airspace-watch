@@ -54,6 +54,13 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_recent ON events(first_seen);
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
 
+CREATE TABLE IF NOT EXISTS message_refs (
+    event_id   INTEGER NOT NULL,
+    chat_id    TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY (event_id, chat_id)
+);
+
 CREATE TABLE IF NOT EXISTS feedback (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id   INTEGER NOT NULL,
@@ -103,6 +110,11 @@ class Database:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
             )
+            self.conn.commit()
+
+    def kv_delete(self, key: str) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM kv WHERE key=?", (key,))
             self.conn.commit()
 
     # ── items ────────────────────────────────────────────────
@@ -249,10 +261,51 @@ class Database:
             self.conn.commit()
 
     def save_message_ref(self, event_id: int, chat_id: str, message_id: int) -> None:
-        self.update_event(event_id, chat_id=str(chat_id), root_message_id=int(message_id))
+        """پیام ریشه‌ی یک رخداد برای یک گیرنده.
+
+        مرجع اصلی در جدول message_refs نگه داشته می‌شود (به‌ازای هر گیرنده).
+        ستون‌های قدیمی events.chat_id/root_message_id هم برای اولین گیرنده
+        پر می‌شوند تا آمار و کدهای قدیمی (مثل شمارش «منتشرشده») نشکنند.
+        """
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO message_refs(event_id, chat_id, message_id) VALUES(?,?,?) "
+                "ON CONFLICT(event_id, chat_id) DO UPDATE SET message_id=excluded.message_id",
+                (int(event_id), str(chat_id), int(message_id)),
+            )
+            self.conn.execute(
+                "UPDATE events SET chat_id=?, root_message_id=? "
+                "WHERE id=? AND root_message_id IS NULL",
+                (str(chat_id), int(message_id), int(event_id)),
+            )
+            self.conn.commit()
+
+    def message_refs(self, event_id: int) -> dict[str, int]:
+        """نقشه‌ی chat_id ← message_id برای یک رخداد، شامل مرجع قدیمی."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT chat_id, message_id FROM message_refs WHERE event_id=?",
+                (int(event_id),),
+            ).fetchall()
+            legacy = self.conn.execute(
+                "SELECT chat_id, root_message_id FROM events WHERE id=?",
+                (int(event_id),),
+            ).fetchone()
+        refs = {str(row["chat_id"]): int(row["message_id"]) for row in rows}
+        if legacy and legacy["chat_id"] and legacy["root_message_id"]:
+            refs.setdefault(str(legacy["chat_id"]), int(legacy["root_message_id"]))
+        return refs
 
     def find_event_by_message(self, chat_id: str, message_id: int) -> sqlite3.Row | None:
         with self._lock:
+            row = self.conn.execute(
+                """SELECT e.* FROM events e
+                   JOIN message_refs r ON r.event_id = e.id
+                   WHERE r.chat_id=? AND r.message_id=?""",
+                (str(chat_id), int(message_id)),
+            ).fetchone()
+            if row:
+                return row
             return self.conn.execute(
                 "SELECT * FROM events WHERE chat_id=? AND root_message_id=?",
                 (str(chat_id), int(message_id)),
