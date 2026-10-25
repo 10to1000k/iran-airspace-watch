@@ -496,6 +496,106 @@ class TranslatorTests(unittest.TestCase):
         with mock.patch("src.translator.requests.post", side_effect=fake_post):
             self.assertEqual(translator._chat("hello", "system"), "ok")
 
+    def _free_chain_translator(self, mock_env):
+        from unittest import mock
+
+        from src.translator import Translator
+
+        with mock.patch.dict("os.environ", mock_env, clear=False):
+            return Translator(load_config(), db=None)
+
+    def test_free_providers_are_ordered_and_skip_missing_keys(self):
+        translator = self._free_chain_translator(
+            {"OPENROUTER_API_KEY": "or-key", "GEMINI_API_KEY": "gm-key"}
+        )
+        chain = translator._provider_chain()
+        self.assertEqual([p.name for p in chain], ["gemini", "openrouter"])
+        self.assertEqual(chain[0].models[0], "gemini-2.5-flash")
+        self.assertTrue(translator.enabled)
+        self.assertEqual(translator.active_provider, "gemini")
+
+    def test_falls_back_across_providers_on_rate_limit(self):
+        from unittest import mock
+
+        import requests as requests_module
+
+        from src.translator import Translator  # noqa: F401
+
+        translator = self._free_chain_translator(
+            {"GEMINI_API_KEY": "gm-key", "GROQ_API_KEY": "gq-key"}
+        )
+
+        class FakeResponse:
+            def __init__(self, status_code, payload=None):
+                self.status_code = status_code
+                self._payload = payload or {}
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests_module.HTTPError(str(self.status_code))
+
+        calls = []
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append((url, headers["Authorization"]))
+            if "generativelanguage" in url:
+                return FakeResponse(429)  # سهمیه‌ی روزانه‌ی رایگان تمام شده
+            return FakeResponse(
+                200, {"choices": [{"message": {"content": "تیتر\n---\nمتن"}}]}
+            )
+
+        with mock.patch("src.translator.requests.post", side_effect=fake_post):
+            with mock.patch("src.translator.time.sleep"):
+                output = translator._chat("hello", "system")
+
+        self.assertIn("تیتر", output)
+        self.assertEqual(translator.active_provider, "groq")
+        self.assertEqual(translator.active_model, "llama-3.3-70b-versatile")
+        self.assertTrue(any("generativelanguage" in u for u, _ in calls))
+        self.assertTrue(any("groq.com" in u for u, _ in calls))
+        # هر سرویس با کلید خودش صدا زده شده
+        self.assertIn(("https://api.groq.com/openai/v1/chat/completions",
+                       "Bearer gq-key"), calls)
+
+    def test_bad_key_skips_whole_provider_without_retry(self):
+        from unittest import mock
+
+        import requests as requests_module
+
+        translator = self._free_chain_translator(
+            {"GEMINI_API_KEY": "bad-key", "OPENROUTER_API_KEY": "or-key"}
+        )
+
+        class FakeResponse:
+            def __init__(self, status_code, payload=None):
+                self.status_code = status_code
+                self._payload = payload or {}
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests_module.HTTPError(str(self.status_code))
+
+        calls = []
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append(url)
+            if "generativelanguage" in url:
+                return FakeResponse(401)
+            return FakeResponse(200, {"choices": [{"message": {"content": "ok"}}]})
+
+        with mock.patch("src.translator.requests.post", side_effect=fake_post):
+            self.assertEqual(translator._chat("hello", "system"), "ok")
+
+        self.assertEqual(translator.active_provider, "openrouter")
+        # کلید بد فقط یک بار امتحان شده، نه برای هر مدل/تلاش
+        self.assertEqual(sum("generativelanguage" in u for u in calls), 1)
+
     def test_persian_passthrough_needs_no_network(self):
         from src.translator import Translator
 

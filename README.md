@@ -48,7 +48,7 @@ notepad .env
 حداقلِ لازم:
 
 - `TELEGRAM_BOT_TOKEN` — از [@BotFather](https://t.me/BotFather)
-- یک کلید LLM سازگار با OpenAI (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`)
+- دست‌کم یک کلید LLM **رایگان**: بات زنجیره‌ی خودکار **Gemini ← Groq ← OpenRouter** دارد؛ هرکدام از `GEMINI_API_KEY` ([AI Studio](https://aistudio.google.com/apikey))، `GROQ_API_KEY` ([Groq](https://console.groq.com)) یا `OPENROUTER_API_KEY` ([OpenRouter](https://openrouter.ai)) را که ست کنید، به‌ترتیب امتحان می‌شوند و با تمام‌شدن سهمیه یا خطای یک سرویس، ترجمه خودکار با بعدی ادامه پیدا می‌کند. سرویس تکیِ دلخواه (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`) هم همچنان در انتهای زنجیره پشتیبانی می‌شود.
 
 بعد از ساخت بات، **یک بار** در تلگرام به بات `/start` بفرست. بات تلگرام نمی‌تواند شروع‌کننده‌ی چت باشد؛ این تنها کار دستیِ راه‌اندازی است. `chat_id` خودکار ذخیره می‌شود.
 
