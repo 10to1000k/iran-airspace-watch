@@ -142,7 +142,10 @@ spec:
           containers:
             - name: keepalive
               image: __IMAGE__
-              imagePullPolicy: IfNotPresent
+              # حتماً Always: تگ :latest ثابت است و با IfNotPresent نود ممکن است
+              # ایمیج قدیمیِ کش‌شده را اجرا کند (اتفاقی که واقعاً افتاد: ایمیج
+              # قدیمی بدون --keepalive اجرا شد و جاب‌ها Error شدند).
+              imagePullPolicy: Always
               command: ["python", "run.py", "--keepalive"]
               env:
                 - name: KEEPALIVE_DEPLOYMENT

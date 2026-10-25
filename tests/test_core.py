@@ -853,6 +853,23 @@ class ManifestValidationTests(unittest.TestCase):
             ["ImageStream", "BuildConfig", "PersistentVolumeClaim"],
         )
 
+    def test_keepalive_cronjob_always_pulls_latest_image(self):
+        """تگ ایمیج ثابت (:latest) است؛ با IfNotPresent نود ایمیج قدیمیِ
+        کش‌شده را اجرا می‌کند — همان باگی که keepalive را Error کرد."""
+        import yaml
+
+        root = Path(__file__).resolve().parent.parent
+        app_docs = [
+            d
+            for d in yaml.safe_load_all((root / "deploy/app.yaml").read_text("utf-8"))
+            if d
+        ]
+        cronjob = next(d for d in app_docs if d["kind"] == "CronJob")
+        container = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        self.assertEqual(container["imagePullPolicy"], "Always")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
