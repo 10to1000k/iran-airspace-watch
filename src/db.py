@@ -186,6 +186,14 @@ class Database:
                 (since, int(limit)),
             ).fetchall()
 
+    def items_for_event(self, event_id: int, limit: int = 3) -> list[sqlite3.Row]:
+        """آیتم‌های خامِ وصل‌شده به یک رخداد (متن اصلی منابع، برای گفت‌وگو)."""
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM items WHERE event_id=? ORDER BY id ASC LIMIT ?",
+                (int(event_id), int(limit)),
+            ).fetchall()
+
     def get_event(self, event_id: int) -> sqlite3.Row | None:
         with self._lock:
             return self.conn.execute(

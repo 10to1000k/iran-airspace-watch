@@ -743,6 +743,127 @@ class MultiRecipientTests(unittest.TestCase):
                 db.close()
 
 
+class ChatAboutNewsTests(unittest.TestCase):
+    def _make_bot(self, tmp):
+        from unittest import mock
+
+        from src.db import Database
+        from src.telegram_bot import TelegramBot
+
+        db = Database(Path(tmp) / "test.db")
+        event_id, _ = db.create_event({
+            "fingerprint": "chat-test-1",
+            "tokens": {"tehran"},
+            "entity_key": "",
+            "category": "airspace",
+            "severity": "critical",
+            "countries": ["IR"],
+            "airlines": [],
+            "title_fa": "بسته‌شدن حریم هوایی تهران",
+            "body_fa": "حریم هوایی تهران موقتاً بسته شد.",
+            "confidence": "single",
+            "numbers_ok": 1,
+            "primary_url": "https://example.com/n1",
+            "primary_source": "Example",
+        })
+        bot = TelegramBot(load_config(), db)
+        sent = []
+        bot.send = lambda text, chat_id=None, **kw: sent.append((chat_id, text)) or 1
+        return db, bot, event_id, sent
+
+    def test_keyboard_has_chat_button(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db, bot, event_id, _sent = self._make_bot(tmp)
+            try:
+                rows = bot.feedback_keyboard(event_id, "https://example.com/n1")
+                flat = [btn for row in rows for btn in row]
+                self.assertTrue(any(b.get("callback_data") == f"ask:{event_id}" for b in flat))
+                self.assertTrue(any("گفت‌وگو" in b.get("text", "") for b in flat))
+            finally:
+                db.close()
+
+    def test_button_starts_chat_and_questions_go_to_responder(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db, bot, event_id, sent = self._make_bot(tmp)
+            try:
+                seen = {}
+
+                def responder(event, question, history):
+                    seen["event_id"] = int(event["id"])
+                    seen["question"] = question
+                    seen["history"] = history
+                    return "پاسخ تستی درباره‌ی خبر"
+
+                bot.set_chat_responder(responder)
+                bot._handle_callback({
+                    "id": "cb1",
+                    "data": f"ask:{event_id}",
+                    "from": {"id": 555},
+                    "message": {"chat": {"id": 111}},
+                })
+                self.assertEqual(bot._active_chat_event("111"), event_id)
+
+                bot._handle_update(
+                    {"message": {"chat": {"id": 111}, "text": "علت بسته‌شدن چه بود؟"}}
+                )
+                self.assertEqual(seen["event_id"], event_id)
+                self.assertEqual(seen["question"], "علت بسته‌شدن چه بود؟")
+                self.assertTrue(any("پاسخ تستی" in t for _c, t in sent))
+
+                # پرسش دوم حافظه‌ی مکالمه را هم می‌گیرد
+                bot._handle_update(
+                    {"message": {"chat": {"id": 111}, "text": "تا کی ادامه دارد؟"}}
+                )
+                self.assertEqual(len(seen["history"]), 1)
+
+                bot._handle_update(
+                    {"message": {"chat": {"id": 111}, "text": "/endchat"}}
+                )
+                self.assertIsNone(bot._active_chat_event("111"))
+
+                # بعد از پایان، پیام عادی دیگر به responder نمی‌رود
+                seen.clear()
+                bot._handle_update(
+                    {"message": {"chat": {"id": 111}, "text": "سؤال بی‌ربط"}}
+                )
+                self.assertEqual(seen, {})
+            finally:
+                db.close()
+
+    def test_translator_answers_from_event_context(self):
+        from unittest import mock
+
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        event = {
+            "title_fa": "بسته‌شدن حریم هوایی تهران",
+            "body_fa": "حریم هوایی تهران تا ساعت ۱۸ بسته است.",
+            "category": "airspace",
+            "severity": "critical",
+            "first_seen": "2026-01-01T12:00:00+00:00",
+            "primary_source": "Example",
+            "primary_url": "https://example.com/n1",
+            "sources_count": 2,
+            "airlines": "",
+            "countries": "IR",
+        }
+        with mock.patch.object(
+            translator, "_chat", return_value="بر اساس خبر، تا ساعت ۱۸ بسته است."
+        ) as chat:
+            answer = translator.answer_about_event(event, [], "تا کی بسته است؟", [])
+
+        self.assertIn("۱۸", answer)
+        user_content = chat.call_args.args[0]
+        self.assertIn("بسته‌شدن حریم هوایی تهران", user_content)
+        self.assertIn("تا کی بسته است؟", user_content)
+
+
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
         from src.formatter import format_publication_notice

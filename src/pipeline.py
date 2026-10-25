@@ -23,6 +23,13 @@ class Pipeline:
         self.health = health
         self.classifier = Classifier(config)
         self.translator = Translator(config, db)
+        # دکمه‌ی «گفت‌وگو درباره‌ی خبر»: پاسخ پرسش‌ها با همین مترجم/زنجیره‌ی LLM
+        if hasattr(bot, "set_chat_responder"):
+            bot.set_chat_responder(self._answer_chat_question)
+
+    def _answer_chat_question(self, event, question: str, history) -> str:
+        items = self.db.items_for_event(int(event["id"]), limit=3)
+        return self.translator.answer_about_event(event, items, question, history)
 
     # ── ورودی اصلی ───────────────────────────────────────────
     def process(self, item: RawItem) -> str:
