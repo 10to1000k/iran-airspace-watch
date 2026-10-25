@@ -604,6 +604,54 @@ class TranslatorTests(unittest.TestCase):
         self.assertEqual(result.engine, "passthrough-fa")
 
 
+class TelegramListenerTests(unittest.TestCase):
+    def test_conflict_marks_health_so_pod_is_not_restarted(self):
+        """409 یعنی نمونه‌ی خارجی تداخل دارد؛ نخ زنده است و نباید
+        سلامت‌سنج به‌خاطر نرسیدن getUpdates موفق، پاد را ری‌استارت کند."""
+        from unittest import mock
+
+        from src.health import HealthState
+        from src.telegram_bot import TelegramBot, TelegramError
+
+        class FakeDb:
+            def kv_get(self, key, default=None):
+                return "0"
+
+            def kv_set(self, key, value):
+                pass
+
+        class FakeStop:
+            def __init__(self):
+                self.stopped = False
+
+            def is_set(self):
+                return self.stopped
+
+            def wait(self, _seconds):
+                self.stopped = True
+                return True
+
+            def set(self):
+                self.stopped = True
+
+        config = load_config()
+        health = HealthState(stale_seconds=300)
+        health.expect_poll("telegram_bot", 300)
+        bot = TelegramBot(config, FakeDb(), health=health)
+        bot._stop = FakeStop()
+
+        def conflict(*_args, **_kwargs):
+            raise TelegramError("Conflict", status_code=409)
+
+        with mock.patch.object(bot, "_call", side_effect=conflict):
+            bot._listen_loop()
+
+        self.assertEqual(bot._conflict_count, 1)
+        # با وجود خطا، poll ثبت شده و وضعیت سالم می‌ماند
+        self.assertTrue(health.healthy())
+        self.assertIn("telegram_bot", health.snapshot()["last_poll_utc"])
+
+
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
         from src.formatter import format_publication_notice
@@ -804,6 +852,23 @@ class ManifestValidationTests(unittest.TestCase):
             [doc["kind"] for doc in build_docs],
             ["ImageStream", "BuildConfig", "PersistentVolumeClaim"],
         )
+
+    def test_keepalive_cronjob_always_pulls_latest_image(self):
+        """تگ ایمیج ثابت (:latest) است؛ با IfNotPresent نود ایمیج قدیمیِ
+        کش‌شده را اجرا می‌کند — همان باگی که keepalive را Error کرد."""
+        import yaml
+
+        root = Path(__file__).resolve().parent.parent
+        app_docs = [
+            d
+            for d in yaml.safe_load_all((root / "deploy/app.yaml").read_text("utf-8"))
+            if d
+        ]
+        cronjob = next(d for d in app_docs if d["kind"] == "CronJob")
+        container = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        self.assertEqual(container["imagePullPolicy"], "Always")
 
 
 if __name__ == "__main__":

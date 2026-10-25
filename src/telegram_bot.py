@@ -32,6 +32,7 @@ class TelegramBot:
         self.token = config.telegram_token
         self.dry_run = config.dry_run
         self._stop = threading.Event()
+        self._conflict_count = 0
         self._thread: threading.Thread | None = None
         self._on_ready_callbacks: list = []
 
@@ -222,13 +223,33 @@ class TelegramBot:
                 )
                 if self.health:
                     self.health.mark_poll("telegram_bot")
+                if self._conflict_count:
+                    log.info("تداخل تلگرام برطرف شد؛ شنونده به حالت عادی برگشت")
+                    self._conflict_count = 0
             except TelegramError as exc:
+                # تلگرام جواب داده (حتی با خطا)؛ پس نخ شنونده زنده و در حال
+                # پیشرفت است. اگر اینجا mark_poll نکنیم، سلامت‌سنج بعد از
+                # چند دقیقه پاد را «مرده» حساب می‌کند و OpenShift بی‌دلیل
+                # ری‌استارتش می‌کند — در حالی که ری‌استارت، تداخلِ یک نمونه‌ی
+                # خارجی را حل نمی‌کند و فقط چرخه‌ی ری‌استارت می‌سازد.
+                if self.health:
+                    self.health.mark_poll("telegram_bot")
                 if exc.status_code == 409:
-                    log.error(
-                        "تداخل تلگرام (409 Conflict): یک نمونه‌ی دیگر از همین بات همزمان روشن است! "
-                        "فقط یک نمونه باید با این توکن اجرا شود."
-                    )
-                    self._stop.wait(10)
+                    self._conflict_count += 1
+                    wait = min(10 * self._conflict_count, 60)
+                    if self._conflict_count == 1:
+                        log.error(
+                            "تداخل تلگرام (409 Conflict): یک نمونه‌ی دیگر از همین بات همزمان روشن است! "
+                            "فقط یک نمونه باید با این توکن اجرا شود. جزئیات تلگرام: %s",
+                            exc,
+                        )
+                    else:
+                        log.warning(
+                            "تداخل تلگرام (409) همچنان ادامه دارد (تلاش %d)؛ نمونه‌ی دیگر را متوقف کنید. تلاش بعدی %d ثانیه دیگر.",
+                            self._conflict_count,
+                            wait,
+                        )
+                    self._stop.wait(wait)
                 elif exc.status_code in (401, 404):
                     log.error("توکن تلگرام نامعتبر یا باطل شده است (%s): %s", exc.status_code, exc)
                     self._stop.wait(30)
