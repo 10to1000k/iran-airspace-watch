@@ -74,7 +74,7 @@ class Config:
                 "id": f"tg_{username.lower()}",
                 "name": f"Telegram @{username}",
                 "username": username,
-                "lang": "fa",
+                "lang": "auto",
                 "country": "INTL",
                 "tier": 1,
                 "enabled": True,

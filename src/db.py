@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS events (
     status          TEXT NOT NULL DEFAULT 'open',
     primary_url     TEXT,
     primary_source  TEXT,
+    primary_published_at TEXT,
+    telegram_sent_at TEXT,
     chat_id         TEXT,
     root_message_id INTEGER,
     sources_count   INTEGER NOT NULL DEFAULT 1,
@@ -113,7 +115,38 @@ class Database:
         with self._lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            self._migrate_event_publication_columns()
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_items_event_published "
+                "ON items(event_id, published_at)"
+            )
             self.conn.commit()
+
+    def _migrate_event_publication_columns(self) -> None:
+        """افزودن ستون‌های زمان به دیتابیس‌های قدیمی و پرکردن منبع اولیه از آیتم‌ها."""
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "primary_published_at" not in columns:
+            self.conn.execute("ALTER TABLE events ADD COLUMN primary_published_at TEXT")
+        if "telegram_sent_at" not in columns:
+            self.conn.execute("ALTER TABLE events ADD COLUMN telegram_sent_at TEXT")
+
+        # بازیابی منبع و timestamp زودتر از آیتم‌های پیشینِ همین رخداد.
+        self.conn.execute(
+            """UPDATE events AS e
+               SET (primary_source, primary_url, primary_published_at) = (
+                   SELECT i.source_name, i.url, i.published_at
+                   FROM items AS i
+                   WHERE i.event_id=e.id
+                   ORDER BY CASE WHEN i.published_at IS NULL THEN 1 ELSE 0 END,
+                            i.published_at, i.id
+                   LIMIT 1
+               )
+               WHERE e.primary_published_at IS NULL
+                 AND EXISTS (SELECT 1 FROM items AS i WHERE i.event_id=e.id)"""
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -266,7 +299,7 @@ class Database:
                         item.source_id, item.source_name, item.source_url, item.url,
                         item.lang, item.country, item.kind, item.title, item.body,
                         fp, util.iso(item.published_at) if item.published_at else None,
-                        util.iso(util.now_utc()), event_id,
+                        item.extra.get("collected_at") or util.iso(util.now_utc()), event_id,
                     ),
                 )
                 self.conn.commit()
@@ -336,7 +369,8 @@ class Database:
             "numbers_ok": int(data.get("numbers_ok", 1)),
             "primary_url": data.get("primary_url", ""),
             "primary_source": data.get("primary_source", ""),
-            "first_seen": now,
+            "primary_published_at": data.get("primary_published_at"),
+            "first_seen": data.get("first_seen") or now,
             "last_updated": now,
         }
         columns = ", ".join(payload)
@@ -387,8 +421,33 @@ class Database:
             )
             self.conn.commit()
 
-    def save_message_ref(self, event_id: int, chat_id: str, message_id: int) -> None:
-        self.update_event(event_id, chat_id=str(chat_id), root_message_id=int(message_id))
+    def earliest_item_for_event(self, event_id: int) -> sqlite3.Row | None:
+        """زودترین آیتمِ منتشرشده در میان منابعی که به این رخداد وصل شده‌اند."""
+        with self._lock:
+            return self.conn.execute(
+                """SELECT source_id, source_name, source_url, url, title, body,
+                          lang, country, kind, published_at
+                   FROM items
+                   WHERE event_id=?
+                   ORDER BY CASE WHEN published_at IS NULL THEN 1 ELSE 0 END,
+                            published_at, id
+                   LIMIT 1""",
+                (event_id,),
+            ).fetchone()
+
+    def save_message_ref(
+        self,
+        event_id: int,
+        chat_id: str,
+        message_id: int,
+        sent_at: str | None = None,
+    ) -> None:
+        self.update_event(
+            event_id,
+            chat_id=str(chat_id),
+            root_message_id=int(message_id),
+            telegram_sent_at=sent_at or util.iso(util.now_utc()),
+        )
 
     def find_event_by_message(self, chat_id: str, message_id: int) -> sqlite3.Row | None:
         with self._lock:

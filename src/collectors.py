@@ -8,17 +8,20 @@ from __future__ import annotations
 import calendar
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import feedparser
 import requests
 
 from . import util
+from .article import ArticleFetcher, clean_html_text
+from .classify import Classifier
 from .models import RawItem
 from .notam import NotamCollector
 
@@ -130,6 +133,20 @@ class RssCollector:
         self.max_age_hours = float(config.get("poll.max_item_age_hours", 12))
         self.per_feed = int(config.get("poll.max_items_per_feed", 15))
         self.max_workers = max(1, int(config.get("poll.rss_workers", 6)))
+        self.fetch_full_articles = bool(config.get("poll.fetch_full_articles", True))
+        self.article_fetch_min_chars = max(
+            0, int(config.get("poll.article_fetch_min_rss_chars", 1800))
+        )
+        self.article_fetch_max_per_feed = max(
+            0, int(config.get("poll.article_fetch_max_per_feed", 3))
+        )
+        self.article_fetch_max_per_poll = max(
+            0, int(config.get("poll.article_fetch_max_per_poll", 18))
+        )
+        self._article_fetch_count = 0
+        self._article_fetch_lock = threading.Lock()
+        self.classifier = Classifier(config)
+        self.article_fetcher = ArticleFetcher(config)
         self.skip_url_parts = [
             part.lower() for part in (config.get("poll.skip_url_parts", []) or [])
         ]
@@ -148,6 +165,8 @@ class RssCollector:
         return False
 
     def poll(self) -> list[RawItem]:
+        with self._article_fetch_lock:
+            self._article_fetch_count = 0
         sources = self.cfg.rss_sources
         if not sources:
             return []
@@ -195,6 +214,7 @@ class RssCollector:
         cutoff = util.now_utc() - timedelta(hours=self.max_age_hours)
 
         out: list[RawItem] = []
+        article_fetches = 0
         for entry in parsed.entries[: self.per_feed]:
             published = _entry_time(entry)
             if published and published < cutoff:
@@ -202,27 +222,77 @@ class RssCollector:
             title = util.strip_html(entry.get("title", "")).strip()
             body = _entry_body(entry)
             raw_link = (entry.get("link") or "").strip()
-            if raw_link and self._should_skip(raw_link, source["url"]):
+            link = urljoin(source["url"], raw_link) if raw_link else source["url"]
+            if raw_link and self._should_skip(link, source["url"]):
                 continue
-            link = raw_link or source["url"]
             if not title and not body:
                 continue
-            out.append(
-                RawItem(
-                    source_id=source["id"],
-                    source_name=source["name"],
-                    source_url=source["url"],
-                    title=title,
-                    body=body,
-                    url=link,
-                    lang=source.get("lang", "en"),
-                    country=source.get("country", "INTL"),
-                    kind="rss",
-                    published_at=published,
-                    extra={"tier": source.get("tier", 2)},
-                )
+
+            item = RawItem(
+                source_id=source["id"],
+                source_name=source["name"],
+                source_url=source["url"],
+                title=title,
+                body=body,
+                url=link,
+                lang=source.get("lang", "en"),
+                country=source.get("country", "INTL"),
+                kind="rss",
+                published_at=published,
+                extra={
+                    "tier": source.get("tier", 2),
+                    "collected_at": util.iso(util.now_utc()),
+                },
             )
+            full_body = None
+            if self._is_article_candidate(item):
+                cache_hit, cached_body = self.article_fetcher.cached(link, source["url"])
+                if cache_hit:
+                    full_body = cached_body
+                elif self._should_fetch_article(item, article_fetches, candidate_checked=True):
+                    article_fetches += 1
+                    full_body = self.article_fetcher.fetch(link, source["url"])
+                if full_body and _is_better_article_text(full_body, item.body):
+                    item.extra["article_text_fetched"] = True
+                    item.extra["rss_body_chars"] = len(item.body)
+                    item.body = full_body
+                    log.debug(
+                        "متن صفحه‌ی مقاله برای %s دریافت شد (%d نویسه)",
+                        source.get("id"),
+                        len(full_body),
+                    )
+            out.append(item)
         return out
+
+    def _is_article_candidate(self, item: RawItem) -> bool:
+        if (
+            not self.fetch_full_articles
+            or len(item.body) >= self.article_fetch_min_chars
+            or not item.url
+            or not ArticleFetcher.can_fetch(item.url, item.source_url)
+        ):
+            return False
+        try:
+            return self.classifier.classify(item).relevant
+        except Exception as exc:  # noqa: BLE001
+            log.debug(
+                "پیش‌فیلتر مقاله ناموفق شد؛ واکشی انجام نمی‌شود: %s", exc
+            )
+            return False
+
+    def _should_fetch_article(
+        self, item: RawItem, article_fetches: int, candidate_checked: bool = False
+    ) -> bool:
+        if (
+            article_fetches >= self.article_fetch_max_per_feed
+            or (not candidate_checked and not self._is_article_candidate(item))
+        ):
+            return False
+        with self._article_fetch_lock:
+            if self._article_fetch_count >= self.article_fetch_max_per_poll:
+                return False
+            self._article_fetch_count += 1
+        return True
 
 
 def _entry_time(entry) -> datetime | None:
@@ -234,13 +304,24 @@ def _entry_time(entry) -> datetime | None:
 
 
 def _entry_body(entry) -> str:
-    if entry.get("content"):
-        raw = entry["content"][0].get("value", "")
-    else:
-        raw = entry.get("summary", "") or entry.get("description", "")
-    text = util.strip_html(raw)
-    text = " ".join(text.split())
-    return util.truncate(text, 1200)
+    """طولانی‌ترین متن RSS را بدون بریدن نگه می‌دارد و شکست پاراگراف‌ها را حفظ می‌کند."""
+    candidates: list[str] = []
+    for content in entry.get("content", []) or []:
+        if isinstance(content, dict):
+            candidates.append(clean_html_text(content.get("value", "")))
+    for key in ("summary", "description", "content_encoded"):
+        value = entry.get(key, "") or ""
+        if isinstance(value, dict):
+            value = value.get("value", "")
+        candidates.append(clean_html_text(value))
+    return max(candidates, key=len, default="")
+
+
+def _is_better_article_text(article_body: str, rss_body: str) -> bool:
+    """بررسی می‌کند متن صفحه به‌اندازه‌ی کافی از excerpt RSS کامل‌تر باشد."""
+    article_chars = len(clean_html_text(article_body))
+    rss_chars = len(rss_body or "")
+    return article_chars >= max(200, rss_chars + 80, int(rss_chars * 1.15))
 
 
 class TelegramChannelCollector:
@@ -349,14 +430,15 @@ class TelegramPublicPreviewCollector:
                 source_name=source_name,
                 source_url=source_url,
                 title=text.splitlines()[0][:200],
-                body=util.truncate(text, 1200),
+                body=text,
                 url=url,
-                lang=str(source.get("lang") or "fa"),
+                lang=str(source.get("lang") or "auto"),
                 country=str(source.get("country") or "INTL"),
                 kind="telegram",
                 published_at=published_at,
                 extra={
                     "tier": tier,
+                    "collected_at": util.iso(util.now_utc()),
                     "channel": username.casefold(),
                     "telegram_message_id": message_id,
                     "telegram_collection": "public_preview",
@@ -540,7 +622,7 @@ class XCollector:
                         source_name=f"@{username}",
                         source_url=f"https://x.com/{username}",
                         title=text.splitlines()[0][:200],
-                        body=util.truncate(text, 1000),
+                        body=text,
                         url=f"https://x.com/{username}/status/{post.get('id', '')}",
                         lang=str(post.get("lang") or "en"),
                         country="INTL",
@@ -548,6 +630,7 @@ class XCollector:
                         published_at=when,
                         extra={
                             "tier": 1,
+                            "collected_at": util.iso(util.now_utc()),
                             "likes": int(public.get("like_count", 0) or 0),
                             "reposts": int(public.get("retweet_count", 0) or 0),
                         },

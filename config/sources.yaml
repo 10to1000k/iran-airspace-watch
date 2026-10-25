@@ -11,6 +11,12 @@ sources:
   - {id: tr_trt,     name: TRT Haber,       type: rss, url: "https://www.trthaber.com/sondakika_articles.rss", lang: tr, country: TR, tier: 2}
   - {id: tr_hurriyet,name: Hürriyet,        type: rss, url: "https://www.hurriyet.com.tr/rss/anasayfa", lang: tr, country: TR, tier: 2}
   - {id: tr_sozcu,   name: Sözcü,           type: rss, url: "https://www.sozcu.com.tr/feeds-rss-category-gundem", lang: tr, country: TR, tier: 2}
+  - {id: tr_haberler,name: Haberler.com,    type: rss, url: "https://rss.haberler.com/rss.asp", lang: tr, country: TR, tier: 2}
+  - {id: tr_ntv,     name: NTV,             type: rss, url: "https://www.ntv.com.tr/son-dakika.rss", lang: tr, country: TR, tier: 2}
+  - {id: tr_sabah,   name: Sabah,           type: rss, url: "https://www.sabah.com.tr/rss/sondakika.xml", lang: tr, country: TR, tier: 2}
+  - {id: tr_milliyet,name: Milliyet,        type: rss, url: "https://www.milliyet.com.tr/rss/rssnew/sondakikarss.xml", lang: tr, country: TR, tier: 2}
+  # فید عمومیِ قابل‌دسترسیِ DHA/İHA تأیید نشد؛ feedهای abone نیازمند مجوزند.
+  # حساب رسمی DHA نیز از مسیر X API پایش می‌شود.
   # 403 (Cloudflare) — فعلاً خاموش
   - {id: tr_duvar,   name: Gazete Duvar,    type: rss, url: "https://www.gazeteduvar.com.tr/rss", lang: tr, country: TR, tier: 2, enabled: false}
 

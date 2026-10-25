@@ -35,6 +35,7 @@ class TelegramBot:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_ready_callbacks: list = []
+        self._message_continuations: dict[int, list[int]] = {}
         enabled_raw = (config.env_get("ENABLE_TELEGRAM_CHANNELS", "false") or "false")
         self._channel_monitor_enabled = (
             enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -55,7 +56,7 @@ class TelegramBot:
     def poll_channel_posts(self) -> list[RawItem]:
         return self.db.pending_telegram_posts(
             limit=100,
-            max_age_hours=float(self.cfg.get("poll.max_item_age_hours", 12)),
+            max_age_hours=float(self.cfg.get("poll.telegram_queue_max_age_hours", 12)),
         )
 
     def ack_channel_post(self, update_key: str) -> None:
@@ -155,7 +156,9 @@ class TelegramBot:
             return None
 
         chunks = _split_message(text)
-        last_id: int | None = None
+        first_id: int | None = None
+        continuation_ids: list[int] = []
+        continuation_parent = reply_to
         for index, chunk in enumerate(chunks):
             payload = {
                 "chat_id": target,
@@ -164,19 +167,27 @@ class TelegramBot:
                 "disable_web_page_preview": True,
                 "disable_notification": silent,
             }
-            if reply_to and index == 0:
+            if continuation_parent:
                 payload["reply_parameters"] = {
-                    "message_id": reply_to,
+                    "message_id": continuation_parent,
                     "allow_sending_without_reply": True,
                 }
-            if keyboard and index == len(chunks) - 1:
+            # شناسه‌ی ثبت‌شده در رخداد باید به پیام اول اشاره کند؛ دکمه‌ها هم روی همان پیام باشند.
+            if keyboard and index == 0:
                 payload["reply_markup"] = {"inline_keyboard": keyboard}
             result = self._call("sendMessage", payload)
-            if isinstance(result, dict):
-                last_id = result.get("message_id")
+            message_id = result.get("message_id") if isinstance(result, dict) else None
+            if index == 0:
+                first_id = message_id
+                if first_id:
+                    continuation_parent = first_id
+            elif message_id:
+                continuation_ids.append(int(message_id))
             if index < len(chunks) - 1:
                 time.sleep(0.4)
-        return last_id
+        if first_id and continuation_ids:
+            self._message_continuations[int(first_id)] = continuation_ids
+        return first_id
 
     def edit(self, message_id: int, text: str, chat_id: str | None = None, keyboard: list | None = None) -> None:
         target = self.chat_id(chat_id)
@@ -185,16 +196,54 @@ class TelegramBot:
             return
         if not target or not message_id:
             return
+
+        chunks = _split_message(text)
         payload = {
             "chat_id": target,
             "message_id": message_id,
-            "text": text[:MAX_LEN],
+            "text": chunks[0],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         if keyboard:
             payload["reply_markup"] = {"inline_keyboard": keyboard}
         self._call("editMessageText", payload)
+
+        old_continuations = self._message_continuations.pop(int(message_id), [])
+        failed_deletions: list[int] = []
+        for old_id in old_continuations:
+            try:
+                self._call("deleteMessage", {"chat_id": target, "message_id": old_id})
+            except TelegramError as exc:
+                failed_deletions.append(old_id)
+                log.debug("حذف ادامه‌ی قدیمی پیام %d ناموفق بود: %s", old_id, exc)
+
+        new_continuations: list[int] = failed_deletions
+        if failed_deletions:
+            self._message_continuations[int(message_id)] = failed_deletions
+        for index, chunk in enumerate(chunks[1:], start=1):
+            result = self._call(
+                "sendMessage",
+                {
+                    "chat_id": target,
+                    "text": chunk,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                    "disable_notification": True,
+                    "reply_parameters": {
+                        "message_id": int(message_id),
+                        "allow_sending_without_reply": True,
+                    },
+                },
+            )
+            continuation_id = result.get("message_id") if isinstance(result, dict) else None
+            if continuation_id:
+                new_continuations.append(int(continuation_id))
+                self._message_continuations[int(message_id)] = new_continuations
+            if index < len(chunks) - 1:
+                time.sleep(0.4)
+        if new_continuations:
+            self._message_continuations[int(message_id)] = new_continuations
 
     def answer_callback(self, callback_id: str, text: str, show_alert: bool = False) -> None:
         if self.dry_run or not self.token:
@@ -334,6 +383,11 @@ class TelegramBot:
                 f"آیتم‌ها: {util.fa_digits(stats['items'])}",
                 f"📡 منابع سالم: {util.fa_digits(src_health['ok'])} | "
                 f"خطادار: {util.fa_digits(len(src_health['failing']))}",
+                (
+                    "🌐 ترجمه: فعال"
+                    if self.cfg.llm_api_key
+                    else "⚠️ ترجمه‌ی خبرهای غیرفارسی متوقف است؛ LLM_API_KEY را تنظیم کنید"
+                ),
             ]
             if self.health:
                 snap = self.health.snapshot()
@@ -422,7 +476,7 @@ class TelegramBot:
             published_at = datetime.fromtimestamp(int(message["date"]), tz=timezone.utc)
         except (KeyError, TypeError, ValueError, OSError):
             published_at = util.now_utc()
-        max_age = max(1.0, float(self.cfg.get("poll.max_item_age_hours", 12)))
+        max_age = max(1.0, float(self.cfg.get("poll.telegram_queue_max_age_hours", 12)))
         if published_at < util.now_utc() - timedelta(hours=max_age):
             return
 
@@ -433,13 +487,17 @@ class TelegramBot:
             source_name=channel_name,
             source_url=source_url,
             title=text.splitlines()[0][:200],
-            body=util.truncate(text, 1200),
+            body=text,
             url=f"{source_url}/{message_id}",
-            lang=str(source.get("lang") or "fa"),
+            lang=str(source.get("lang") or "auto"),
             country=str(source.get("country") or "INTL"),
             kind="telegram",
             published_at=published_at,
-            extra={"tier": int(source.get("tier", 1)), "channel": username},
+            extra={
+                "tier": int(source.get("tier", 1)),
+                "channel": username,
+                "collected_at": util.iso(util.now_utc()),
+            },
         )
         update_key = (
             f"tg-update:{update_id}"
@@ -470,17 +528,41 @@ class TelegramBot:
 
 
 def _split_message(text: str) -> list[str]:
+    """تقسیم کامل متن به قطعات مجاز؛ حتی یک پاراگراف/خط بلند هم بریده نمی‌شود."""
     if len(text) <= MAX_LEN:
         return [text]
-    chunks, current = [], ""
-    for line in text.split("\n"):
-        if len(current) + len(line) + 1 > MAX_LEN:
-            chunks.append(current)
-            current = line
-        else:
-            current = f"{current}\n{line}" if current else line
-    if current:
-        chunks.append(current)
+
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > MAX_LEN:
+        cut = MAX_LEN
+        newline = remaining.rfind("\n", 0, MAX_LEN)
+        space = remaining.rfind(" ", 0, MAX_LEN)
+        if newline >= MAX_LEN // 2:
+            cut = newline + 1
+        elif space >= MAX_LEN // 2:
+            cut = space + 1
+
+        # متن‌های قالب‌بندی‌شده‌ی برنامه ممکن است HTML entity یا تگ کوتاه داشته باشند.
+        # مرز قطعه را به وسط آن‌ها نمی‌بریم تا Telegram کل پیام را بدون خطای parse بپذیرد.
+        tag_start = remaining.rfind("<", 0, cut)
+        tag_end = remaining.rfind(">", 0, cut)
+        if tag_start > tag_end:
+            cut = tag_start
+
+        entity_start = remaining.rfind("&", 0, cut)
+        if entity_start >= 0 and ";" not in remaining[entity_start:cut]:
+            suffix = remaining[entity_start:cut]
+            if suffix[1:].replace("#", "").isalnum() or suffix == "&":
+                cut = entity_start
+
+        if cut < max(1, MAX_LEN // 2):
+            cut = MAX_LEN
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:]
+
+    if remaining:
+        chunks.append(remaining)
     return chunks
 
 

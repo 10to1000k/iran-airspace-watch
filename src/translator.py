@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import requests
@@ -12,16 +13,21 @@ from .models import Translation
 
 log = logging.getLogger(__name__)
 
+TRANSLATION_CHUNK_CHARS = 2400
+_PERSIAN_DISTINCTIVE = set("پچژگکی")
+_ARABIC_DISTINCTIVE = set("يكةىؤئأإٱ")
+
 SYSTEM_PROMPT = """You are a professional aviation news translator into Persian (Farsi).
 
 HARD RULES — violating any of them makes the output unusable:
-1. Translate ONLY. Never add facts, numbers, dates, names, or opinions that are not in the source.
-2. Keep these in Latin script, never transliterate: ICAO/IATA airport codes (OIIE, OIII, OIIX, IKA, THR),
+1. Translate the COMPLETE supplied text into Persian. Do not summarize, shorten, skip, or omit any sentence, paragraph, quote, attribution, or detail.
+2. Translate ONLY. Never add facts, numbers, dates, names, or opinions that are not in the source.
+3. Keep these in Latin script, never transliterate: ICAO/IATA airport codes (OIIE, OIII, OIIX, IKA, THR),
    NOTAM numbers, flight numbers, airline brand names, "NOTAM", "FIR", "UTC", "FL".
-3. Persian must be natural newsroom Persian, not literal word-by-word translation. Use "می‌" with ZWNJ.
-4. Keep every number exactly as in the source.
-5. Do not add a headline if none is given. Do not add hashtags.
-6. Output plain text only. No markdown, no commentary, no explanation.
+4. Persian must be natural newsroom Persian, not literal word-by-word translation. Use "می‌" with ZWNJ.
+5. Keep every number exactly as in the source and preserve the order of the source paragraphs.
+6. Do not add a headline if none is given. Do not add hashtags.
+7. Output plain text only. No markdown, no commentary, no explanation.
 
 Aviation glossary (use these exact Persian equivalents when the term appears):
 {terms}
@@ -117,6 +123,61 @@ class Translator:
                     time.sleep(1.0 * (attempt + 1))
         raise RuntimeError(f"ترجمه ناموفق بود: {last_error}")
 
+    @staticmethod
+    def _looks_like_arabic(text: str) -> bool:
+        arabic_count = sum(char in _ARABIC_DISTINCTIVE for char in text)
+        persian_count = sum(char in _PERSIAN_DISTINCTIVE for char in text)
+        return arabic_count >= 4 and arabic_count > max(1, persian_count * 2)
+
+    @classmethod
+    def _is_persian_input(cls, lang: str, text: str) -> bool:
+        code = (lang or "auto").strip().casefold().split("-", 1)[0]
+        has_persian_letters = any(char in _PERSIAN_DISTINCTIVE or char == "ی" for char in text)
+        if code in {"fa", "auto", "und", ""}:
+            return has_persian_letters and not cls._looks_like_arabic(text)
+        return False
+
+    @staticmethod
+    def _looks_like_persian_output(text: str) -> bool:
+        has_arabic_script = re.search(r"[\u0600-\u06ff\u0750-\u077f]", text or "")
+        return bool(has_arabic_script) and not Translator._looks_like_arabic(text)
+
+    @staticmethod
+    def _split_text(text: str, limit: int = TRANSLATION_CHUNK_CHARS) -> list[str]:
+        """تقسیم متن بلند در مرز پاراگراف/جمله، بدون حذف محتوای میانی."""
+        remaining = (text or "").strip()
+        if not remaining:
+            return []
+        chunks: list[str] = []
+        separators = ("\n\n", "\n", ". ", "? ", "! ", "؟ ", "۔ ", " ")
+        while len(remaining) > limit:
+            cut = limit
+            for separator in separators:
+                position = remaining.rfind(separator, 0, limit + 1)
+                if position >= limit // 2:
+                    cut = position + len(separator)
+                    break
+            chunks.append(remaining[:cut].strip())
+            remaining = remaining[cut:].strip()
+        if remaining:
+            chunks.append(remaining)
+        return chunks
+
+    @staticmethod
+    def _source_language_name(lang: str) -> str:
+        code = (lang or "auto").strip().casefold().split("-", 1)[0]
+        return {
+            "ar": "Arabic",
+            "az": "Azerbaijani",
+            "en": "English",
+            "fa": "Persian",
+            "ru": "Russian",
+            "tr": "Turkish",
+            "zh": "Chinese",
+            "auto": "the detected source language",
+            "und": "the detected source language",
+        }.get(code, "the detected source language")
+
     # ── API عمومی ────────────────────────────────────────────
     def translate_item(
         self,
@@ -127,19 +188,14 @@ class Translator:
         decoded_fa: str = "",
         raw: str = "",
     ) -> Translation:
-        if lang == "fa":
+        if self._is_persian_input(lang, f"{title}\n{body}"):
             return Translation(text_fa=body or title, title_fa=title, engine="passthrough-fa")
 
         if not self.enabled:
             if not self._warned:
-                log.warning("LLM_API_KEY تنظیم نشده — ترجمه غیرفعال است، متن اصلی ارسال می‌شود")
+                log.warning("LLM_API_KEY تنظیم نشده — ترجمه متوقف شد و متن منبع منتشر نمی‌شود")
                 self._warned = True
-            return Translation(
-                text_fa=f"[ترجمه نشده — کلید LLM تنظیم نیست]\n{title}\n{body}".strip(),
-                title_fa=title,
-                engine="disabled",
-                numbers_ok=True,
-            )
+            return Translation(text_fa="", title_fa="", engine="disabled", numbers_ok=False)
 
         if kind == "notam":
             source_text = (
@@ -147,49 +203,78 @@ class Translator:
                 f"Raw NOTAM:\n{raw}\n\n"
                 f"Pre-decoded facts (already in Persian, do not contradict): {decoded_fa}"
             )
-            cache_key = _hash(f"notam::{title}::{raw}")
+            cache_key = _hash(f"translation-v2::notam::{lang}::{title}::{raw}::{decoded_fa}")
         else:
-            source_text = f"HEADLINE:\n{title}\n\nBODY:\n{body}"
-            cache_key = _hash(f"{lang}::{title}::{body}")
+            cache_key = _hash(f"translation-v2::{lang}::{title}::{body}")
 
         cached = self._cache_get(cache_key)
         if cached:
             parts = cached.split("\n", 1)
             return Translation(
-                text_fa=parts[1] if len(parts) > 1 else cached,
+                text_fa=parts[1] if len(parts) > 1 else "",
                 title_fa=parts[0],
                 engine="cache",
-                numbers_ok=util.numbers_preserved(f"{title} {body}", cached),
+                numbers_ok=util.numbers_preserved(f"{title} {body} {raw}", cached),
             )
-
-        system = SYSTEM_PROMPT.format(terms=self._term_block(f"{title} {body} {raw}"))
-        instruction = (
-            "Translate the following into Persian. Return exactly two parts separated by a line "
-            "containing only ---: first the headline in Persian, then the body in Persian. "
-            "If the source has no headline, produce a short factual Persian headline "
-            "(max 12 words) that contains no new information.\n\n" + source_text
-        )
 
         try:
-            output = self._chat(instruction, system)
-        except Exception as exc:  # noqa: BLE001
-            log.error("%s", exc)
-            return Translation(
-                text_fa=f"[خطای ترجمه — متن اصلی]\n{title}\n{body}".strip(),
-                title_fa=title,
-                engine="failed",
-                numbers_ok=False,
-            )
+            if kind == "notam":
+                system = SYSTEM_PROMPT.format(terms=self._term_block(f"{title} {body} {raw}"))
+                instruction = (
+                    "Translate the complete NOTAM explanation into Persian. Do not summarize or omit facts. "
+                    "Return the Persian headline, a line containing only ---, then the complete Persian body.\n\n"
+                    + source_text
+                )
+                output = self._chat(instruction, system).strip()
+                parts = re.split(r"(?m)^\s*---\s*$", output, maxsplit=1)
+                if len(parts) == 2:
+                    head, body_fa = parts[0].strip(), parts[1].strip()
+                else:
+                    # اگر مدل جداکننده را رعایت نکرد، متن بدنه را دور نمی‌ریزیم.
+                    head, body_fa = title, output
+            else:
+                language = self._source_language_name(lang)
+                head = ""
+                if title.strip():
+                    system = SYSTEM_PROMPT.format(terms=self._term_block(title))
+                    head_prompt = (
+                        f"Source language: {language}. Translate ONLY this complete news headline into Persian. "
+                        "Do not summarize, explain, or add a label; return only the translated headline.\n\n"
+                        f"HEADLINE:\n{title}"
+                    )
+                    head = self._chat(head_prompt, system).strip()
+                    if not head:
+                        raise RuntimeError("مدل تیتر فارسی برنگرداند")
 
-        if "---" in output:
-            head, body_fa = output.split("---", 1)
-        else:
-            lines = [line for line in output.splitlines() if line.strip()]
-            head = lines[0] if lines else title
-            body_fa = "\n".join(lines[1:]) or output
+                translated_parts: list[str] = []
+                body_chunks = self._split_text(body)
+                for index, fragment in enumerate(body_chunks):
+                    system = SYSTEM_PROMPT.format(terms=self._term_block(fragment))
+                    body_prompt = (
+                        f"Source language: {language}. Translate this COMPLETE body fragment into Persian. "
+                        "Do not summarize, shorten, skip, or omit any sentence, paragraph, quote, attribution, "
+                        "or detail. Preserve paragraph order and all numbers. Return only the Persian translation, "
+                        "with no heading or commentary. This is body fragment "
+                        f"{index + 1} of {len(body_chunks)}.\n\nBODY FRAGMENT:\n{fragment}"
+                    )
+                    translated = self._chat(body_prompt, system).strip()
+                    if not translated:
+                        raise RuntimeError(f"مدل بخش {index + 1} از متن را ترجمه نکرد")
+                    if len(fragment) >= 500 and len(translated) < max(100, len(fragment) * 0.20):
+                        raise RuntimeError(f"ترجمه‌ی بخش {index + 1} بیش از حد کوتاه است؛ احتمال خلاصه‌شدن دارد")
+                    translated_parts.append(translated)
+                body_fa = "\n\n".join(translated_parts)
+
+                combined_translation = f"{head}\n{body_fa}".strip()
+                if combined_translation and not self._looks_like_persian_output(combined_translation):
+                    raise RuntimeError("خروجی مدل فارسی نیست؛ متن منبع منتشر نمی‌شود")
+
+        except Exception as exc:  # noqa: BLE001
+            log.error("ترجمه‌ی کامل خبر ناموفق بود؛ انتشار متوقف شد: %s", exc)
+            return Translation(text_fa="", title_fa="", engine="failed", numbers_ok=False)
+
         head = head.strip().strip("#").strip()
         body_fa = body_fa.strip()
-
         self._cache_set(cache_key, f"{head}\n{body_fa}")
         ok = util.numbers_preserved(f"{title} {body} {raw}", f"{head} {body_fa}")
         if not ok:

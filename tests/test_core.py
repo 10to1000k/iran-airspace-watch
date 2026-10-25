@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import util
+from src.article import ArticleFetcher
 from src.classify import Classifier
 from src.config import load_config
 from src.formatter import format_event
@@ -61,6 +62,61 @@ class UtilTests(unittest.TestCase):
     def test_jalali(self):
         self.assertEqual(util.g2j(2026, 3, 21), (1405, 1, 1))
         self.assertEqual(util.g2j(2025, 3, 20), (1403, 12, 30))
+
+
+class DatabaseMigrationTests(unittest.TestCase):
+    def test_old_database_migrates_and_uses_earliest_published_source(self):
+        import sqlite3
+        import tempfile
+
+        from src.db import Database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.sqlite"
+            connection = sqlite3.connect(path)
+            connection.executescript(
+                """CREATE TABLE events (
+                       id INTEGER PRIMARY KEY,
+                       primary_source TEXT,
+                       primary_url TEXT,
+                       first_seen TEXT NOT NULL,
+                       status TEXT NOT NULL DEFAULT 'open'
+                   );
+                   CREATE TABLE items (
+                       id INTEGER PRIMARY KEY,
+                       source_name TEXT,
+                       url TEXT,
+                       published_at TEXT,
+                       event_id INTEGER
+                   );
+                   INSERT INTO events(id, primary_source, primary_url, first_seen)
+                   VALUES(1, 'later publisher', 'https://later.example/story',
+                          '2026-10-24T00:00:00+00:00');
+                   INSERT INTO items(id, source_name, url, published_at, event_id)
+                   VALUES(1, 'later publisher', 'https://later.example/story',
+                          '2026-10-22T12:00:00+00:00', 1);
+                   INSERT INTO items(id, source_name, url, published_at, event_id)
+                   VALUES(2, 'earlier publisher', 'https://earlier.example/story',
+                          '2026-10-22T10:00:00+00:00', 1);"""
+            )
+            connection.commit()
+            connection.close()
+
+            db = Database(path)
+            try:
+                event = db.get_event(1)
+                self.assertEqual(event["primary_source"], "earlier publisher")
+                self.assertEqual(event["primary_url"], "https://earlier.example/story")
+                self.assertEqual(
+                    event["primary_published_at"], "2026-10-22T10:00:00+00:00"
+                )
+                columns = {
+                    row["name"]
+                    for row in db.conn.execute("PRAGMA table_info(events)").fetchall()
+                }
+                self.assertIn("telegram_sent_at", columns)
+            finally:
+                db.close()
 
 
 class SocialTextTests(unittest.TestCase):
@@ -379,8 +435,271 @@ class ClassifierTests(unittest.TestCase):
         self.assertIn("Pakistan International Airlines", pk_item.airlines)
         self.assertIn("PK", pk_item.countries)
 
+    def test_turkish_iranian_arrest_at_foreign_airport_is_relevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "İranlı yolcular İstanbul Havalimanı'nda uyuşturucu suçundan yakalandı",
+                "İranlı iki yolcu, İstanbul Havalimanı'nda yapılan arama sonrası tutuklandı.",
+                lang="tr",
+                country="TR",
+            )
+        )
+
+        self.assertTrue(result.relevant)
+        self.assertEqual(result.category, "airport")
+        self.assertIn("IR", result.countries)
+        self.assertIn("TR", result.countries)
+
 
 class CollectorTests(unittest.TestCase):
+    def test_public_turkish_news_feeds_are_enabled(self):
+        sources = {source["id"]: source for source in load_config().rss_sources}
+        expected = {"tr_haberler", "tr_ntv", "tr_sabah", "tr_milliyet"}
+
+        self.assertTrue(expected.issubset(sources))
+        self.assertEqual(sources["tr_haberler"]["lang"], "tr")
+        self.assertEqual(sources["tr_ntv"]["country"], "TR")
+        self.assertTrue(
+            ArticleFetcher.can_fetch(
+                "https://www.haberler.com/story",
+                sources["tr_haberler"]["url"],
+            )
+        )
+
+    def test_dynamic_telegram_channel_language_defaults_to_auto(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"TELEGRAM_CHANNELS": "arabicnews"}):
+            config = load_config()
+            source = next(
+                channel for channel in config.telegram_channels
+                if channel["username"] == "arabicnews"
+            )
+        self.assertEqual(source["lang"], "auto")
+
+    def test_rss_body_keeps_full_content_and_paragraph_breaks(self):
+        from src.collectors import _entry_body
+
+        paragraphs = [f"بند شماره {index} و متن کامل گزارش؛ پایان گزارش {index}." for index in range(1, 45)]
+        entry = {"content": [{"value": "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)}]}
+
+        body = _entry_body(entry)
+
+        self.assertGreater(len(body), 1200)
+        self.assertEqual(body.count("\n\n"), len(paragraphs) - 1)
+        self.assertIn("پایان گزارش 44.", body)
+
+    def test_rss_body_uses_the_longest_available_content_field(self):
+        from src.collectors import _entry_body
+
+        entry = {
+            "content": [{"value": "<p>Short preview.</p>"}],
+            "summary": "<p>" + "Full summary detail. " * 80 + "</p>",
+        }
+
+        body = _entry_body(entry)
+
+        self.assertGreater(len(body), 1000)
+        self.assertIn("Full summary detail.", body)
+
+    def test_article_extractor_ignores_navigation_and_keeps_paragraphs(self):
+        from src.article import extract_article_text
+
+        article = (
+            "<html><body><nav>navigation must not be included</nav>"
+            "<main><article><h1>Iran airport development</h1>"
+            "<div class='article-content'><p>First complete article paragraph.</p>"
+            "<p>Second paragraph contains the full report and all details.</p></div>"
+            "</article></main><footer>footer must not be included</footer></body></html>"
+        )
+
+        text = extract_article_text(article)
+
+        self.assertIn("First complete article paragraph.", text)
+        self.assertIn("Second paragraph contains the full report", text)
+        self.assertIn("\n\n", text)
+        self.assertNotIn("navigation must not be included", text)
+        self.assertNotIn("footer must not be included", text)
+
+    def test_article_extractor_reads_structured_article_body(self):
+        import json
+
+        from src.article import extract_article_text
+
+        structured = json.dumps({
+            "@context": "https://schema.org",
+            "@type": "NewsArticle",
+            "articleBody": (
+                "Structured full article body with all source details and numbers 47. "
+                "It preserves every paragraph and the complete original report as provided."
+            ),
+        })
+        text = extract_article_text(
+            f"<html><head><script type='application/ld+json'>{structured}</script></head></html>"
+        )
+
+        self.assertIn("Structured full article body", text)
+        self.assertIn("47", text)
+
+    def test_rss_collector_fetches_full_article_for_short_relevant_feed_text(self):
+        from unittest import mock
+
+        from src.collectors import RssCollector
+
+        config = load_config()
+        source = {
+            "id": "test_rss",
+            "name": "Example News",
+            "url": "https://example.com/rss",
+            "lang": "en",
+            "country": "INTL",
+            "tier": 1,
+        }
+        paragraphs = "".join(
+            f"<p>Paragraph {index}: the full report covers Iran airport operations and "
+            "the complete aviation development plan, including every detail.</p>"
+            for index in range(1, 25)
+        )
+        feed = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            "<rss version='2.0'><channel><title>Example</title><item>"
+            "<title>Iran airport aviation development plan</title>"
+            "<link>https://example.com/news/iran-airport-plan</link>"
+            "<description><![CDATA[<p>Iran airport development update.</p>]]></description>"
+            "</item></channel></rss>"
+        ).encode()
+        page = (
+            "<html><body><nav>ignore nav</nav><article>"
+            f"<div class='article-content'>{paragraphs}</div>"
+            "</article></body></html>"
+        ).encode()
+
+        class FakeResponse:
+            status_code = 200
+            encoding = "utf-8"
+            apparent_encoding = "utf-8"
+
+            def __init__(self, body, content_type):
+                self.body = body
+                self.headers = {"Content-Type": content_type}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=32768):
+                for start in range(0, len(self.body), chunk_size):
+                    yield self.body[start:start + chunk_size]
+
+        def fake_get(url, **_kwargs):
+            if url == source["url"]:
+                return FakeResponse(feed, "application/rss+xml")
+            if url == "https://example.com/news/iran-airport-plan":
+                return FakeResponse(page, "text/html; charset=utf-8")
+            raise AssertionError(f"Unexpected URL requested: {url}")
+
+        collector = RssCollector(config, db=None)
+        with mock.patch("src.collectors.requests.get", side_effect=fake_get):
+            items = collector._fetch(source)
+
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0].extra["article_text_fetched"])
+        self.assertGreater(len(items[0].body), 1800)
+        self.assertIn("Paragraph 24", items[0].body)
+        self.assertNotIn("ignore nav", items[0].body)
+
+    def test_rss_backfill_keeps_three_day_old_reports_within_configured_window(self):
+        from datetime import timedelta
+        from unittest import mock
+
+        from src.collectors import RssCollector
+
+        config = load_config()
+        config.settings["poll"]["max_item_age_hours"] = 96
+        config.settings["poll"]["fetch_full_articles"] = False
+        published = datetime.now(timezone.utc) - timedelta(days=3)
+        pub_date = published.strftime("%a, %d %b %Y %H:%M:%S GMT")
+        feed = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            "<rss version='2.0'><channel><title>Example</title><item>"
+            "<title>İranlı yolcular İstanbul Havalimanı'nda yakalandı</title>"
+            "<link>https://example.com/iran-airport-arrest</link>"
+            f"<pubDate>{pub_date}</pubDate>"
+            "<description>İranlı yolcular İstanbul Havalimanı'nda yakalandı.</description>"
+            "</item></channel></rss>"
+        ).encode("utf-8")
+        source = {
+            "id": "tr_example", "name": "Example", "url": "https://example.com/rss",
+            "lang": "tr", "country": "TR", "tier": 2,
+        }
+
+        collector = RssCollector(config, db=None)
+        with mock.patch.object(collector, "_read_bounded", return_value=feed):
+            items = collector._fetch(source)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].published_at.date(), published.date())
+        self.assertIn("collected_at", items[0].extra)
+
+        config.settings["poll"]["max_item_age_hours"] = 12
+        recent_only = RssCollector(config, db=None)
+        with mock.patch.object(recent_only, "_read_bounded", return_value=feed):
+            self.assertEqual(recent_only._fetch(source), [])
+
+    def test_article_fetch_per_poll_limit_is_enforced(self):
+        from types import SimpleNamespace
+
+        from src.collectors import RssCollector
+
+        config = load_config()
+        config.settings["poll"]["article_fetch_max_per_poll"] = 1
+        collector = RssCollector(config, db=None)
+        collector.classifier.classify = lambda _item: SimpleNamespace(relevant=True)
+        item = RawItem(
+            source_id="test", source_name="test", source_url="https://example.com/rss",
+            title="short relevant article", body="excerpt", url="https://example.com/story",
+        )
+
+        self.assertTrue(collector._should_fetch_article(item, article_fetches=0))
+        self.assertFalse(collector._should_fetch_article(item, article_fetches=0))
+
+    def test_article_fetcher_blocks_cross_site_and_private_redirects(self):
+        from unittest import mock
+
+        from src.article import ArticleFetcher
+
+        fetcher = ArticleFetcher()
+        with mock.patch("src.article.requests.get") as get:
+            self.assertIsNone(
+                fetcher.fetch("https://other.example/article", "https://example.com/rss")
+            )
+            self.assertIsNone(
+                fetcher.fetch("https://127.0.0.1/admin", "https://example.com/rss")
+            )
+            get.assert_not_called()
+
+            class RedirectResponse:
+                status_code = 302
+                headers = {"Location": "http://127.0.0.1/admin"}
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+            get.return_value = RedirectResponse()
+            self.assertIsNone(
+                fetcher.fetch("https://example.com/article", "https://example.com/rss")
+            )
+            self.assertEqual(get.call_count, 1)
+
     def test_live_blog_and_index_urls_are_skipped_but_fr24_articles_kept(self):
         from src.collectors import RssCollector
 
@@ -476,7 +795,7 @@ class CollectorTests(unittest.TestCase):
         </div>
         """
         old_page = f"""
-        <div class=\"tgme_widget_message\" data-post=\"testchannel/4\" data-post-date=\"{now - 86400}\">
+        <div class=\"tgme_widget_message\" data-post=\"testchannel/4\" data-post-date=\"{now - 7 * 86400}\">
           <div class=\"tgme_widget_message_text js-message_text\">Old Iran flight update</div>
         </div>
         """
@@ -627,6 +946,78 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(items[0].url, "https://x.com/aviation_watch/status/123")
         self.assertEqual(items[0].extra["likes"], 7)
         self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-bearer")
+
+    def test_long_telegram_message_is_split_without_loss_and_returns_root_id(self):
+        import os
+        from unittest import mock
+
+        from src.telegram_bot import MAX_LEN, TelegramBot, _split_message
+
+        text = "<b>تیتر</b>\n" + ("متن کامل &amp; جزئیات خبر. " * 500)
+        chunks = _split_message(text)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= MAX_LEN for chunk in chunks))
+        self.assertEqual("".join(chunks), text)
+        self.assertTrue(all(not chunk.endswith("&amp") for chunk in chunks))
+
+        calls = []
+
+        def fake_call(method, payload, **kwargs):
+            calls.append((method, payload))
+            return {"message_id": 100 + len(calls)}
+
+        with mock.patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456:test-token", "TELEGRAM_CHAT_ID": "123"},
+        ):
+            bot = TelegramBot(load_config(), db=None)
+            bot._call = fake_call
+            with mock.patch("src.telegram_bot.time.sleep"):
+                root_id = bot.send(
+                    text,
+                    keyboard=[[{"text": "مفید", "callback_data": "fb:up:1"}]],
+                )
+
+        self.assertEqual(root_id, 101)
+        self.assertEqual(len(calls), len(chunks))
+        self.assertIn("reply_markup", calls[0][1])
+        self.assertNotIn("reply_markup", calls[-1][1])
+        self.assertEqual(calls[1][1]["reply_parameters"]["message_id"], root_id)
+
+    def test_edit_splits_long_text_and_replaces_old_continuations(self):
+        import os
+        from unittest import mock
+
+        from src.telegram_bot import TelegramBot, _split_message
+
+        text = "به‌روزرسانی کامل\n" + ("ادامه‌ی متن کامل خبر. " * 500)
+        chunks = _split_message(text)
+        calls = []
+
+        def fake_call(method, payload, **kwargs):
+            calls.append((method, payload))
+            return {"message_id": 200 + len(calls)}
+
+        with mock.patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456:test-token", "TELEGRAM_CHAT_ID": "123"},
+        ):
+            bot = TelegramBot(load_config(), db=None)
+            bot._call = fake_call
+            bot._message_continuations[77] = [88, 89]
+            with mock.patch("src.telegram_bot.time.sleep"):
+                bot.edit(77, text)
+
+        self.assertEqual(calls[0][0], "editMessageText")
+        deleted = [payload["message_id"] for method, payload in calls if method == "deleteMessage"]
+        self.assertEqual(deleted, [88, 89])
+        sent = [payload["text"] for method, payload in calls if method == "sendMessage"]
+        self.assertEqual([calls[0][1]["text"], *sent], chunks)
+        self.assertEqual("".join([calls[0][1]["text"], *sent]), text)
+        self.assertTrue(all(
+            payload["reply_parameters"]["message_id"] == 77
+            for method, payload in calls if method == "sendMessage"
+        ))
 
     def test_telegram_bot_receives_posts_only_from_configured_channels(self):
         import os
@@ -886,6 +1277,116 @@ class TranslatorTests(unittest.TestCase):
         result = translator.translate_item("لغو پرواز", "متن فارسی", "fa")
         self.assertEqual(result.engine, "passthrough-fa")
 
+    def test_arabic_article_is_translated_to_persian(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        prompts = []
+
+        def fake_chat(prompt, system):
+            prompts.append(prompt)
+            if "HEADLINE:" in prompt:
+                return "تیتر فارسی خبر"
+            return "این متن کامل به فارسی ترجمه شده است."
+
+        translator._chat = fake_chat
+        result = translator.translate_item(
+            "إيران تعلن تحديثاً جديداً للمطار",
+            "أعلنت السلطات أن الرحلات الجوية ستستمر، مع تحديث الخدمات في المطار.",
+            "ar",
+        )
+
+        self.assertEqual(result.engine, translator.active_model)
+        self.assertEqual(result.title_fa, "تیتر فارسی خبر")
+        self.assertIn("فارسی ترجمه شده", result.text_fa)
+        self.assertTrue(any("Source language: Arabic" in prompt for prompt in prompts))
+        self.assertTrue(any("Do not summarize" in prompt for prompt in prompts))
+
+    def test_arabic_text_is_translated_even_if_source_language_is_mislabeled_fa(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        prompts = []
+        translator._chat = lambda prompt, system: (
+            prompts.append(prompt) or
+            ("عنوان فارسی" if "HEADLINE:" in prompt else "این گزارش به فارسی ترجمه شد.")
+        )
+
+        result = translator.translate_item(
+            "إيران تعلن تحديثاً جديداً للمطار",
+            "أعلنت السلطات أن الرحلات الجوية ستستمر في مطار طهران.",
+            "fa",
+        )
+
+        self.assertNotEqual(result.engine, "passthrough-fa")
+        self.assertTrue(prompts)
+        self.assertIn("فارسی ترجمه شد", result.text_fa)
+
+    def test_arabic_model_output_is_not_accepted_as_persian(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        translator._chat = lambda prompt, system: (
+            "إيران تعلن تحديثاً جديداً للمطار"
+            if "HEADLINE:" in prompt
+            else "أعلنت السلطات أن الرحلات الجوية ستستمر، مع تحديث الخدمات في المطار."
+        )
+
+        result = translator.translate_item(
+            "إيران تعلن تحديثاً جديداً للمطار",
+            "أعلنت السلطات أن الرحلات الجوية ستستمر، مع تحديث الخدمات في المطار.",
+            "ar",
+        )
+
+        self.assertEqual(result.engine, "failed")
+        self.assertEqual(result.text_fa, "")
+
+    def test_long_article_is_translated_in_complete_chunks(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        body = "\n\n".join(f"Paragraph-{index} full source content." for index in range(1, 180))
+        prompts = []
+
+        def fake_chat(prompt, system):
+            import re
+
+            prompts.append(prompt)
+            if "HEADLINE:" in prompt:
+                return "تیتر فارسی"
+            fragment = prompt.split("BODY FRAGMENT:\n", 1)[1]
+            numbers = " ".join(re.findall(r"\d+", fragment))
+            return "پ" * max(120, len(fragment) // 2) + " " + numbers
+
+        translator._chat = fake_chat
+        result = translator.translate_item("Aviation report", body, "en")
+        body_prompts = [prompt for prompt in prompts if "BODY FRAGMENT:\n" in prompt]
+        supplied = "\n".join(
+            prompt.split("BODY FRAGMENT:\n", 1)[1] for prompt in body_prompts
+        )
+
+        self.assertGreater(len(body_prompts), 1)
+        self.assertGreater(len(result.text_fa), 700)
+        for index in (1, 20, 90, 179):
+            self.assertIn(f"Paragraph-{index} full source content.", supplied)
+        self.assertTrue(all("Do not summarize" in prompt for prompt in body_prompts))
+
+    def test_summary_sized_translation_is_rejected(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        translator._chat = lambda prompt, system: (
+            "تیتر فارسی" if "HEADLINE:" in prompt else "خلاصه"
+        )
+        result = translator.translate_item("Long aviation report", "Source sentence. " * 100, "en")
+        self.assertEqual(result.engine, "failed")
+        self.assertEqual(result.text_fa, "")
+
 
 class FormatterTests(unittest.TestCase):
     def test_format_contains_source_and_badge(self):
@@ -915,8 +1416,235 @@ class FormatterTests(unittest.TestCase):
         self.assertNotIn("##", notice)
         self.assertIn("#هشدار", notice)
 
+    def test_event_formatter_keeps_the_complete_body(self):
+        config = load_config()
+        full_body = "متن کامل خبر و جزئیات آن. " * 100 + "پایان گزارش کامل"
+        event = {
+            "severity": "important", "category": "airport",
+            "title_fa": "خبر فرودگاه", "body_fa": full_body,
+            "confidence": "single", "numbers_ok": 1,
+            "primary_source": "منبع آزمایشی",
+            "primary_url": "https://example.com/full",
+            "first_seen": util.iso(util.now_utc()),
+            "airlines": "", "countries": "IR",
+        }
+
+        formatted = format_event(event, config)
+
+        self.assertIn("پایان گزارش کامل", formatted)
+        self.assertGreater(len(formatted), 700)
+
 
 class PipelineRecoveryTests(unittest.TestCase):
+    def test_foreign_news_is_not_published_when_translation_is_unavailable(self):
+        import tempfile
+
+        from src.db import Database
+        from src.pipeline import Pipeline
+
+        class FakeBot:
+            def __init__(self):
+                self.sent = []
+
+            def send(self, text, **kwargs):
+                self.sent.append(text)
+                return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "translation-required.db")
+            try:
+                config = load_config()
+                bot = FakeBot()
+                pipeline = Pipeline(config, db, bot)
+                pipeline.translator.api_key = None
+                item = RawItem(
+                    source_id="ar_news",
+                    source_name="Arabic Aviation News",
+                    source_url="https://example.com/rss",
+                    title="إيران توقف الرحلات الجوية في مطار طهران",
+                    body="أعلنت السلطات تعليق الرحلات الجوية مؤقتاً في مطار طهران.",
+                    url="https://example.com/news/1",
+                    lang="ar",
+                    country="AE",
+                )
+                fingerprint = util.fingerprint(item.source_id, item.url, item.title, item.body[:400])
+
+                with self.assertRaisesRegex(RuntimeError, "متوقف"):
+                    pipeline.process(item)
+
+                self.assertEqual(bot.sent, [])
+                self.assertFalse(db.item_seen(item.source_id, fingerprint))
+            finally:
+                db.close()
+
+    def test_clustered_foreign_source_gets_a_full_translated_reply(self):
+        import tempfile
+
+        from src.db import Database
+        from src.models import Translation
+        from src.pipeline import Pipeline
+
+        class FakeBot:
+            def __init__(self):
+                self.sent = []
+                self.edited = []
+
+            def send(self, text, **kwargs):
+                self.sent.append(text)
+                return 700 + len(self.sent)
+
+            def chat_id(self):
+                return "123"
+
+            def feedback_keyboard(self, event_id, url=""):
+                return []
+
+            def edit(self, message_id, text, **kwargs):
+                self.edited.append((message_id, text))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "clustered-source.db")
+            try:
+                bot = FakeBot()
+                pipeline = Pipeline(load_config(), db, bot)
+                first = RawItem(
+                    source_id="ir_first",
+                    source_name="منبع فارسی",
+                    source_url="https://example.com/rss",
+                    title="لغو پروازها در فرودگاه مهرآباد تهران",
+                    body="پروازهای مهرآباد موقتاً متوقف شد.",
+                    url="https://example.com/first",
+                    lang="fa",
+                    country="IR",
+                )
+                self.assertEqual(pipeline.process(first), "published")
+                event = db.latest_events(limit=1)[0]
+
+                second = RawItem(
+                    source_id="ar_agency",
+                    source_name="Arabic Aviation Agency",
+                    source_url="https://arabic.example/rss",
+                    title="إيران توقف الرحلات في مطار مهرآباد",
+                    body="أعلنت السلطات تعليق الرحلات مؤقتاً في مطار مهرآباد.",
+                    url="https://arabic.example/news/2",
+                    lang="ar",
+                    country="AE",
+                )
+                fingerprint = util.fingerprint(
+                    second.source_id, second.url, second.title, second.body[:400]
+                )
+                self.assertTrue(db.add_item(second, fingerprint))
+                pipeline.translator.translate_item = lambda **kwargs: Translation(
+                    text_fa="مقام‌های ایران توقف موقت پروازها در مهرآباد را اعلام کردند.",
+                    title_fa="توقف موقت پروازها در مهرآباد",
+                    engine="mock-translation",
+                )
+                classification = pipeline.classifier.classify(second)
+
+                result = pipeline._update_event(second, fingerprint, classification, event)
+
+                self.assertEqual(result, "updated")
+                self.assertEqual(len(bot.sent), 2)
+                self.assertIn("گزارش کامل", bot.sent[1])
+                self.assertIn("مقام‌های ایران توقف موقت پروازها", bot.sent[1])
+                self.assertNotIn(second.title, bot.sent[1])
+            finally:
+                db.close()
+
+    def test_late_reprint_promotes_earliest_monitored_source_and_tracks_lag(self):
+        import tempfile
+        from datetime import timedelta
+
+        from src.db import Database
+        from src.models import Translation
+        from src.pipeline import Pipeline
+
+        class FakeBot:
+            configured = True
+
+            def __init__(self):
+                self.sent = []
+                self.edited = []
+
+            def send(self, text, **kwargs):
+                self.sent.append((text, kwargs))
+                return 500 + len(self.sent)
+
+            def chat_id(self):
+                return "123"
+
+            def feedback_keyboard(self, event_id, url=""):
+                return []
+
+            def edit(self, message_id, text, **kwargs):
+                self.edited.append((message_id, text))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "first-publisher.db")
+            try:
+                bot = FakeBot()
+                pipeline = Pipeline(load_config(), db, bot)
+                pipeline.translator.translate_item = lambda **kwargs: Translation(
+                    text_fa="ترجمهٔ کامل خبر بازداشت مسافران ایرانی در فرودگاه استانبول.",
+                    title_fa="بازداشت مسافران ایرانی در فرودگاه استانبول",
+                    engine="test",
+                )
+                now = util.now_utc()
+                first_published = now - timedelta(days=3)
+                shared_title = "İranlı iki yolcu İstanbul Havalimanı'nda uyuşturucuyla tutuklandı"
+                shared_body = (
+                    "İran'dan İstanbul Havalimanı'na gelen iki yolcu şüpheli hareketleri "
+                    "nedeniyle durduruldu. Valizlerinde çikolatayla kaplanmış 1 kilo 222 "
+                    "gram uyuşturucu bulundu ve iki yolcu tutuklandı."
+                )
+                first = RawItem(
+                    source_id="tr_hurriyet",
+                    source_name="Hürriyet",
+                    source_url="https://www.hurriyet.com.tr/rss/anasayfa",
+                    title=shared_title,
+                    body=shared_body,
+                    url="https://www.hurriyet.com.tr/story/1",
+                    lang="tr",
+                    country="TR",
+                    published_at=first_published,
+                    extra={"collected_at": util.iso(now - timedelta(hours=8))},
+                )
+                self.assertEqual(pipeline.process(first), "published")
+                event_id = int(db.latest_events(limit=1)[0]["id"])
+
+                # خبرگزاری زودتر منتشر کرده، اما فیدش دیرتر از Hürriyet دیده می‌شود.
+                dha_published = first_published - timedelta(minutes=15)
+                second = RawItem(
+                    source_id="tr_dha",
+                    source_name="DHA",
+                    source_url="https://www.dha.com.tr/son-dakika/",
+                    title=shared_title,
+                    body=shared_body,
+                    url="https://www.dha.com.tr/story/1",
+                    lang="tr",
+                    country="TR",
+                    published_at=dha_published,
+                    extra={"collected_at": util.iso(now)},
+                )
+                pipeline.translator.translate_item = lambda **kwargs: Translation(
+                    text_fa="", title_fa="", engine="failed"
+                )
+                result = pipeline.process(second)
+
+                self.assertEqual(result, "updated")
+                self.assertEqual(len(bot.sent), 1)
+                self.assertNotIn(shared_body, bot.sent[0][0])
+                event = db.get_event(event_id)
+                self.assertEqual(event["primary_source"], "DHA")
+                self.assertEqual(event["primary_published_at"], util.iso(dha_published))
+                self.assertTrue(event["telegram_sent_at"])
+                self.assertTrue(bot.edited)
+                self.assertIn("نخستین انتشارِ رصدشده: DHA", bot.edited[0][1])
+                self.assertIn("فاصله از انتشار تا ارسال", bot.edited[0][1])
+                self.assertEqual(len(db.distinct_sources_for_event(event_id)), 2)
+            finally:
+                db.close()
+
     def test_unsent_event_is_queued_and_flushed_later(self):
         import tempfile
 
@@ -1011,8 +1739,9 @@ class SocialStorageTests(unittest.TestCase):
 
         self.assertIn("aviation", queries[0])
         self.assertIn("هوانوردی", queries[1])
-        self.assertIn("#IranAirspace", queries[2])
-        self.assertIn("#iranaviationupdate", queries[3])
+        self.assertIn("from:dhainternet", queries[2])
+        self.assertIn("#IranAirspace", queries[3])
+        self.assertIn("#iranaviationupdate", queries[4])
 
     def test_pipeline_learns_tags_only_from_relevant_social_posts(self):
         import tempfile

@@ -3,12 +3,13 @@ app:
   display_timezone: Asia/Tehran
   # پنجره‌ی خوشه‌بندی: خبرهای هم‌موضوع در این بازه به یک رخداد وصل می‌شوند
   dedupe_window_hours: 6
+  # بازنشر دیررس فقط در صورت شباهت بالا و نزدیکی زمان انتشار به همان رخداد ادغام می‌شود.
+  late_dedupe_window_hours: 168
+  late_dedupe_published_window_hours: 168
   # آستانه‌ی شباهت متنی برای یکسان‌دانستن دو خبر
   similarity_threshold: 0.72
   # اگر ایرلاین/فرودگاه مشترک باشد، آستانه پایین‌تر می‌آید
   entity_boost_threshold: 0.45
-  # حداکثر طول متن خروجی (تلگرام ۴۰۹۶ کاراکتر)
-  max_body_chars: 700
   # نگه‌داری آیتم‌های خام در دیتابیس (پاک‌سازی خودکار روزانه)
   retention_days: 30
 
@@ -20,10 +21,21 @@ poll:
   telegram_queue_seconds: 10
   # هر نوبت فقط پیش‌نمایش عمومی کانال‌های منتخب تلگرام را با فاصله‌ی محافظه‌کارانه می‌خواند.
   telegram_public_seconds: 300
-  # فقط آیتم‌های تازه‌تر از این بازه پردازش می‌شوند (جلوگیری از سیل اولیه)
-  max_item_age_hours: 12
-  max_items_per_feed: 15
-  x_max_queries: 6
+  # backfill محدود برای خبرهایی که فید/منبع با چند روز تأخیر به آن‌ها می‌رسد.
+  # اثرانگشت پایگاه‌داده و dedupe دیررس از ارسال تکراری جلوگیری می‌کنند.
+  max_item_age_hours: 96
+  # تا ۵۰ آیتم اخیر هر فید برای اینکه خبر ۳–۴ روزه پشت خبرهای جدیدتر نماند.
+  max_items_per_feed: 50
+  # Bot API فقط پیام تازه را می‌دهد؛ صف ورودی کانال محدود می‌ماند.
+  telegram_queue_max_age_hours: 12
+  # اگر RSS چکیده بدهد، متن صفحه‌ی همان ناشر برای خبرهای مرتبط واکشی می‌شود.
+  fetch_full_articles: true
+  article_fetch_min_rss_chars: 1800
+  article_fetch_max_per_feed: 3
+  article_fetch_max_per_poll: 18
+  article_fetch_timeout_seconds: 12
+  article_fetch_max_bytes: 2097152
+  x_max_queries: 7
   # صفحه‌های چرخشی و آرشیوی «خبر واحد» نیستند؛ URLهای شاخص‌شان حذف می‌شود.
   # /blog/ عمداً اینجا نیست چون منابع هوانوردی زیر /blog/ مقاله‌های واقعی دارند.
   skip_url_parts:
@@ -51,8 +63,10 @@ social:
     - فرودگاه_تهران
     - لغو_پرواز_ایران
   x_keyword_queries:
-    - '(Iran OR Iranian OR Tehran OR IKA OR OIIE OR OIII OR OIIX) (flight OR flights OR airline OR airport OR aviation OR "civil aviation" OR "aviation industry" OR "air transport" OR airspace OR NOTAM OR runway OR route OR havalimanı OR havacılık OR مطار OR طيران OR авиация OR аэропорт OR 航空 OR 机场) -is:retweet -is:reply'
+    - '(Iran OR Iranian OR iranlı OR iranli OR Tehran OR IKA OR OIIE OR OIII OR OIIX) (flight OR flights OR airline OR airport OR aviation OR "civil aviation" OR "aviation industry" OR "air transport" OR airspace OR NOTAM OR runway OR route OR havalimanı OR havacılık OR مطار OR طيران OR авиация OR аэропорт OR 航空 OR 机场) -is:retweet -is:reply'
     - '(ایران OR ایرانی OR تهران OR IKA OR OIIE OR OIII OR OIIX) (پرواز OR فرودگاه OR هوانوردی OR هواپیمایی OR صنعت_هوانوردی OR حریم_هوایی OR لغو_پرواز OR تأخیر_پرواز OR مسیر_پروازی OR توسعه_فرودگاه) -is:retweet -is:reply'
+    # فید عمومیِ قابل‌دسترسیِ DHA تأیید نشد؛ حساب رسمی‌اش با X API پایش می‌شود.
+    - 'from:dhainternet (Iran OR Iranian OR iranlı OR iranli OR Tehran OR Tahran) (airport OR havalimanı OR havaalanı OR flight OR havacılık OR uçuş OR yolcu OR gözaltı OR tutuklandı OR uyuşturucu) -is:retweet -is:reply'
 
 # ── NOTAM ────────────────────────────────────────────────────
 # کالکتور NOTAM سازمان هوانوردی آمریکا (FAA) کنار گذاشته شده است: کلید API
@@ -88,7 +102,7 @@ relevance:
     # وگرنه هر خبر «حریم هوایی» در دنیا به ایران وصل می‌شود.
     fa: [ایران, ایرانی, تهران, مهرآباد, "امام خمینی"]
     en: [iran, iranian, tehran, mehrabad, "imam khomeini", "fir tehran", "tehran fir"]
-    tr: [iran, tahran, mehrabad, "imam humeyni"]
+    tr: [iran, "iranlı", "iranli", "iranlılar", "iranliler", "iran uyruklu", "iran vatandaşı", tahran, mehrabad, "imam humeyni"]
     ru: [иран, тегеран, мехрабад, "имам хомейни"]
     ar: [إيران, ايران, طهران, مهرآباد, "الإمام الخميني"]
     zh: [伊朗, 德黑兰, 梅赫拉巴德, 伊玛目霍梅尼]
