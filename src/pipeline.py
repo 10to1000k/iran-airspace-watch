@@ -24,6 +24,12 @@ class Pipeline:
         self.health = health
         self.classifier = Classifier(config)
         self.translator = Translator(config, db)
+        bind_news_chat = getattr(bot, "bind_news_chat", None)
+        if callable(bind_news_chat):
+            bind_news_chat(
+                self.translator.answer_about_event,
+                enabled=self.translator.enabled,
+            )
 
     # ── ورودی اصلی ───────────────────────────────────────────
     def process(self, item: RawItem) -> str:
@@ -135,6 +141,12 @@ class Pipeline:
             raise RuntimeError("ترجمه‌ی فارسی کامل نشد؛ انتشار متن ترجمه‌نشده متوقف شد")
         return translation
 
+    def _event_keyboard(self, event_id: int, url: str = ""):
+        if self.cfg.get("notifications.include_feedback_buttons", True):
+            return self.bot.feedback_keyboard(event_id, url)
+        chat_keyboard = getattr(self.bot, "news_chat_keyboard", None)
+        return chat_keyboard(event_id, url) if callable(chat_keyboard) else None
+
     # ── رخداد تازه ───────────────────────────────────────────
     def _create_event(self, item: RawItem, fp: str, cls, tokens: set[str]) -> str:
         translation = self._translate_item(item)
@@ -179,10 +191,7 @@ class Pipeline:
         display_event = dict(event)
         display_event["telegram_sent_at"] = sent_at
         text = formatter.format_event(display_event, self.cfg)
-        if self.cfg.get("notifications.include_feedback_buttons", True):
-            keyboard = self.bot.feedback_keyboard(event_id, event["primary_url"] or "")
-        else:
-            keyboard = None
+        keyboard = self._event_keyboard(event_id, event["primary_url"] or "")
         try:
             message_id = self.bot.send(
                 text,
@@ -271,7 +280,7 @@ class Pipeline:
                     int(refreshed["root_message_id"]),
                     formatter.format_event(refreshed, self.cfg),
                     chat_id=refreshed["chat_id"],
-                    keyboard=self.bot.feedback_keyboard(event_id, refreshed["primary_url"]),
+                    keyboard=self._event_keyboard(event_id, refreshed["primary_url"]),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.debug("ویرایش پیام ریشه ناموفق: %s", exc)

@@ -118,6 +118,44 @@ class DatabaseMigrationTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_news_chat_sessions_are_per_user_persistent_and_expire(self):
+        import tempfile
+        from datetime import timedelta
+
+        from src.db import Database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "chat.sqlite")
+            try:
+                db.save_news_chat_session(
+                    "100", "100", 7,
+                    [{"role": "user", "content": "چرا پرواز لغو شد؟"}],
+                )
+                session = db.get_news_chat_session("100", "100", max_age_minutes=120)
+                self.assertEqual(session["event_id"], 7)
+                self.assertEqual(session["history"][0]["content"], "چرا پرواز لغو شد؟")
+                self.assertIsNone(db.get_news_chat_session("100", "200"))
+
+                old_time = util.iso(util.now_utc() - timedelta(hours=3))
+                db.conn.execute(
+                    "UPDATE telegram_news_chats SET updated_at=? WHERE chat_id='100' AND user_id='100'",
+                    (old_time,),
+                )
+                db.conn.commit()
+                self.assertIsNone(db.get_news_chat_session("100", "100", max_age_minutes=60))
+                self.assertIsNone(db.get_news_chat_session("100", "100", max_age_minutes=120))
+
+                db.save_news_chat_session("200", "200", 8, [])
+                db.conn.execute(
+                    "UPDATE telegram_news_chats SET updated_at=? WHERE chat_id='200' AND user_id='200'",
+                    (old_time,),
+                )
+                db.conn.commit()
+                self.assertEqual(db.prune_news_chat_sessions(max_age_minutes=60), 1)
+                self.assertIsNone(db.get_news_chat_session("200", "200"))
+            finally:
+                db.close()
+
 
 class SocialTextTests(unittest.TestCase):
     def test_hashtags_normalize_and_filter_generic_noise(self):
@@ -984,6 +1022,123 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn("reply_markup", calls[-1][1])
         self.assertEqual(calls[1][1]["reply_parameters"]["message_id"], root_id)
 
+    def test_news_chat_keyboard_discovers_bot_username_with_getme(self):
+        import os
+        from unittest import mock
+
+        from src.telegram_bot import TelegramBot
+
+        with mock.patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456:test-token", "TELEGRAM_BOT_USERNAME": ""},
+        ):
+            bot = TelegramBot(load_config(), db=None)
+            calls = []
+
+            def fake_call(method, payload, **kwargs):
+                calls.append(method)
+                return {"username": "iran_watch_bot"}
+
+            bot._call = fake_call
+            bot.bind_news_chat(lambda event, question, history: "پاسخ", enabled=True)
+            keyboard = bot.news_chat_keyboard(42)
+
+        self.assertEqual(calls, ["getMe"])
+        self.assertEqual(
+            keyboard[0][0]["url"],
+            "https://t.me/iran_watch_bot?start=chat_42",
+        )
+
+    def test_news_chat_deep_link_keeps_broadcast_chat_and_answers_with_context(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from src.db import Database
+        from src.telegram_bot import TelegramBot
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "TELEGRAM_BOT_TOKEN": "123456:test-token",
+                "TELEGRAM_BOT_USERNAME": "iran_watch_bot",
+                "TELEGRAM_CHAT_ID": "-100broadcast",
+            },
+        ):
+            db = Database(Path(tmp) / "news-chat.sqlite")
+            try:
+                event_id, _ = db.create_event({
+                    "fingerprint": "news-chat-event",
+                    "title_fa": "تغییر مسیر پرواز در تهران",
+                    "body_fa": "متن کامل خبر درباره‌ی تغییر مسیر پرواز.",
+                    "primary_source": "خبرگزاری آزمایشی",
+                    "primary_published_at": "2026-10-25T09:00:00+00:00",
+                })
+                bot = TelegramBot(load_config(), db)
+                seen = []
+                sent = []
+                bot.bind_news_chat(
+                    lambda event, question, history: (
+                        seen.append((event, question, history)) or "پاسخ <قابل‌اعتماد> & کامل"
+                    ),
+                    enabled=True,
+                )
+                bot.send = lambda text, chat_id=None, **kwargs: sent.append((text, chat_id))
+
+                keyboard = bot.feedback_keyboard(event_id)
+                self.assertEqual(
+                    keyboard[1][0]["url"],
+                    f"https://t.me/iran_watch_bot?start=chat_{event_id}",
+                )
+
+                bot._handle_update({"message": {
+                    "chat": {"id": 77, "type": "private"},
+                    "from": {"id": 77},
+                    "text": f"/start chat_{event_id}",
+                }})
+                self.assertIsNone(db.kv_get("chat_id"))
+                self.assertEqual(bot.chat_id(), "-100broadcast")
+                self.assertEqual(db.get_news_chat_session("77", "77")["event_id"], event_id)
+
+                bot._handle_update({"message": {
+                    "chat": {"id": 77, "type": "private"},
+                    "from": {"id": 77},
+                    "text": "چرا مسیر عوض شد؟",
+                }})
+                bot._handle_update({"message": {
+                    "chat": {"id": 77, "type": "private"},
+                    "from": {"id": 77},
+                    "text": "منبع خبر چه بوده؟",
+                }})
+
+                self.assertEqual(seen[0][0]["primary_source"], "خبرگزاری آزمایشی")
+                self.assertEqual(seen[0][1], "چرا مسیر عوض شد؟")
+                self.assertEqual(seen[0][2], [])
+                self.assertEqual(seen[1][2][-2]["content"], "چرا مسیر عوض شد؟")
+                self.assertIn("&lt;قابل‌اعتماد&gt; &amp; کامل", sent[-1][0])
+
+                bot._handle_update({"message": {
+                    "chat": {"id": 77, "type": "private"},
+                    "from": {"id": 77},
+                    "text": "/stopchat",
+                }})
+                self.assertIsNone(db.get_news_chat_session("77", "77"))
+
+                bot._bot_username = ""
+                bot._bot_username_checked = True
+                bot.answer_callback = lambda *args, **kwargs: None
+                fallback = bot.news_chat_keyboard(event_id)
+                self.assertEqual(fallback[0][0]["callback_data"], f"chat:{event_id}")
+                bot._handle_update({"callback_query": {
+                    "id": "callback-1",
+                    "data": f"chat:{event_id}",
+                    "from": {"id": 77},
+                    "message": {"chat": {"id": 77, "type": "private"}},
+                }})
+                self.assertEqual(db.get_news_chat_session("77", "77")["event_id"], event_id)
+            finally:
+                db.close()
+
     def test_edit_splits_long_text_and_replaces_old_continuations(self):
         import os
         from unittest import mock
@@ -1270,6 +1425,55 @@ class TranslatorTests(unittest.TestCase):
         with mock.patch("src.translator.requests.post", side_effect=fake_post):
             self.assertEqual(translator._chat("hello", "system"), "ok")
 
+    def test_news_chat_uses_article_context_and_recent_conversation(self):
+        from src.translator import Translator
+
+        config = load_config()
+        config.settings.setdefault("news_chat", {})["max_article_chars"] = 1000
+        config.settings["news_chat"]["history_messages"] = 2
+        translator = Translator(config, db=None)
+        translator.api_key = "test-key"
+        captured = {}
+
+        def fake_chat(prompt, system):
+            captured["prompt"] = prompt
+            captured["system"] = system
+            return "پاسخ بر اساس متن خبر"
+
+        translator._chat = fake_chat
+        answer = translator.answer_about_event(
+            {
+                "title_fa": "تغییر مسیر پروازها",
+                "body_fa": "جزئیات خبر. " * 200,
+                "primary_source": "خبرگزاری آزمایشی",
+                "primary_published_at": "2026-10-25T09:00:00+00:00",
+            },
+            "کدام پروازها تغییر مسیر دادند؟",
+            [
+                {"role": "user", "content": "سؤال قدیمی"},
+                {"role": "assistant", "content": "پاسخ قدیمی"},
+                {"role": "user", "content": "سؤال اخیر"},
+                {"role": "assistant", "content": "پاسخ اخیر"},
+            ],
+        )
+
+        self.assertEqual(answer, "پاسخ بر اساس متن خبر")
+        self.assertIn("تغییر مسیر پروازها", captured["prompt"])
+        self.assertIn("خبرگزاری آزمایشی", captured["prompt"])
+        self.assertIn("کدام پروازها تغییر مسیر دادند؟", captured["prompt"])
+        self.assertIn("سؤال اخیر", captured["prompt"])
+        self.assertNotIn("سؤال قدیمی", captured["prompt"])
+        self.assertIn("ادامه‌ی متن به‌دلیل محدودیت زمینه", captured["prompt"])
+        self.assertIn("untrusted data", captured["system"])
+
+    def test_news_chat_requires_llm_api_key(self):
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = None
+        with self.assertRaisesRegex(RuntimeError, "LLM_API_KEY"):
+            translator.answer_about_event({"title_fa": "خبر"}, "سؤال")
+
     def test_persian_passthrough_needs_no_network(self):
         from src.translator import Translator
 
@@ -1436,6 +1640,34 @@ class FormatterTests(unittest.TestCase):
 
 
 class PipelineRecoveryTests(unittest.TestCase):
+    def test_pipeline_binds_llm_news_chat_to_telegram_bot(self):
+        import os
+        from unittest import mock
+
+        from src.pipeline import Pipeline
+
+        class ChatBot:
+            def bind_news_chat(self, handler, enabled=True):
+                self.handler = handler
+                self.enabled = enabled
+
+            def news_chat_keyboard(self, event_id, url=""):
+                return [[{"text": f"chat:{event_id}"}]]
+
+        with mock.patch.dict(os.environ, {"LLM_API_KEY": "chat-test-key"}):
+            bot = ChatBot()
+            config = load_config()
+            config.settings["notifications"]["include_feedback_buttons"] = False
+            pipeline = Pipeline(config, db=None, bot=bot)
+            pipeline.translator._chat = lambda prompt, system: "پاسخ آزمایشی"
+
+            self.assertTrue(bot.enabled)
+            self.assertEqual(
+                bot.handler({"title_fa": "خبر", "body_fa": "متن"}, "سؤال", []),
+                "پاسخ آزمایشی",
+            )
+            self.assertEqual(pipeline._event_keyboard(4), [[{"text": "chat:4"}]])
+
     def test_foreign_news_is_not_published_when_translation_is_unavailable(self):
         import tempfile
 

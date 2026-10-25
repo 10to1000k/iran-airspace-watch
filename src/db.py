@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import timedelta
 from pathlib import Path
 
 from . import util
@@ -64,6 +65,17 @@ CREATE TABLE IF NOT EXISTS feedback (
     verdict    TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS telegram_news_chats (
+    chat_id     TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    event_id    INTEGER NOT NULL,
+    history_json TEXT NOT NULL DEFAULT '[]',
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY(chat_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_news_chats_updated
+    ON telegram_news_chats(updated_at);
 
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
@@ -465,6 +477,97 @@ class Database:
 
     def mark_corrected(self, event_id: int) -> None:
         self.update_event(event_id, corrected=1, confidence="corrected")
+
+    # ── گفت‌وگوی خبری تلگرام ─────────────────────────────────
+    def save_news_chat_session(
+        self,
+        chat_id: str,
+        user_id: str,
+        event_id: int,
+        history: list[dict] | None = None,
+    ) -> None:
+        safe_history = []
+        for turn in (history or [])[-12:]:
+            if not isinstance(turn, dict):
+                continue
+            role = str(turn.get("role") or "")
+            content = str(turn.get("content") or "").strip()
+            if role in {"user", "assistant"} and content:
+                safe_history.append({"role": role, "content": content[:3000]})
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO telegram_news_chats
+                       (chat_id, user_id, event_id, history_json, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                       event_id=excluded.event_id,
+                       history_json=excluded.history_json,
+                       updated_at=excluded.updated_at""",
+                (
+                    str(chat_id), str(user_id), int(event_id),
+                    json.dumps(safe_history, ensure_ascii=False), util.iso(util.now_utc()),
+                ),
+            )
+            self.conn.commit()
+
+    def get_news_chat_session(
+        self,
+        chat_id: str,
+        user_id: str,
+        max_age_minutes: float = 120,
+    ) -> dict | None:
+        ttl_minutes = max(1.0, float(max_age_minutes))
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM telegram_news_chats WHERE chat_id=? AND user_id=?",
+                (str(chat_id), str(user_id)),
+            ).fetchone()
+            if not row:
+                return None
+            updated_at = util.parse_iso(row["updated_at"])
+            age_seconds = (
+                (util.now_utc() - updated_at).total_seconds()
+                if updated_at else float("inf")
+            )
+            if age_seconds > ttl_minutes * 60:
+                self.conn.execute(
+                    "DELETE FROM telegram_news_chats WHERE chat_id=? AND user_id=?",
+                    (str(chat_id), str(user_id)),
+                )
+                self.conn.commit()
+                return None
+            try:
+                history = json.loads(row["history_json"] or "[]")
+            except (TypeError, ValueError):
+                history = []
+            if not isinstance(history, list):
+                history = []
+            return {
+                "event_id": int(row["event_id"]),
+                "history": history,
+                "updated_at": row["updated_at"],
+            }
+
+    def clear_news_chat_session(self, chat_id: str, user_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM telegram_news_chats WHERE chat_id=? AND user_id=?",
+                (str(chat_id), str(user_id)),
+            )
+            self.conn.commit()
+
+    def prune_news_chat_sessions(self, max_age_minutes: float = 120) -> int:
+        ttl_minutes = max(1.0, float(max_age_minutes))
+        cutoff = util.iso(util.now_utc() - timedelta(minutes=ttl_minutes))
+        with self._lock:
+            cursor = self.conn.execute(
+                "DELETE FROM telegram_news_chats WHERE updated_at < ?",
+                (cutoff,),
+            )
+            deleted = max(0, int(cursor.rowcount))
+            if deleted:
+                self.conn.commit()
+        return deleted
 
     # ── بازخورد ──────────────────────────────────────────────
     def add_feedback(self, event_id: int, verdict: str) -> None:

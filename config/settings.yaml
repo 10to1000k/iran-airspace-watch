@@ -81,6 +81,13 @@ notifications:
   silent_others: true
   include_feedback_buttons: true
 
+news_chat:
+  # چت درباره‌ی خبر به کلید LLM_API_KEY نیاز دارد؛ جلسه‌ها per-user و موقت‌اند.
+  session_ttl_minutes: 120
+  history_messages: 10
+  max_question_chars: 2000
+  max_article_chars: 18000
+
 # سرور سلامت برای probeهای OpenShift. اگر حلقه‌ی اصلی، کالکتورها یا نخ تلگرام
 # قفل شوند، k8s خودش pod را ری‌استارت می‌کند.
 health:

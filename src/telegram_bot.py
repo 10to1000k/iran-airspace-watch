@@ -36,6 +36,15 @@ class TelegramBot:
         self._thread: threading.Thread | None = None
         self._on_ready_callbacks: list = []
         self._message_continuations: dict[int, list[int]] = {}
+        self._news_chat_handler = None
+        self._news_chat_enabled = False
+        bot_username = str(config.env_get("TELEGRAM_BOT_USERNAME", "") or "").strip().lstrip("@")
+        self._bot_username = (
+            bot_username
+            if bot_username.isascii() and all(char.isalnum() or char == "_" for char in bot_username)
+            else ""
+        )
+        self._bot_username_checked = bool(self._bot_username)
         enabled_raw = (config.env_get("ENABLE_TELEGRAM_CHANNELS", "false") or "false")
         self._channel_monitor_enabled = (
             enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -52,6 +61,30 @@ class TelegramBot:
 
     def on_recipient_ready(self, callback) -> None:
         self._on_ready_callbacks.append(callback)
+
+    def bind_news_chat(self, handler, enabled: bool = True) -> None:
+        self._news_chat_handler = handler if callable(handler) else None
+        self._news_chat_enabled = bool(enabled and self._news_chat_handler)
+
+    def _resolve_bot_username(self) -> str | None:
+        if self._bot_username:
+            return self._bot_username
+        if self._bot_username_checked or not self.token or self.dry_run:
+            return None
+        self._bot_username_checked = True
+        try:
+            result = self._call("getMe", {}, timeout=10, retries=1)
+            username = str((result or {}).get("username") or "").strip().lstrip("@")
+            if username and username.isascii() and all(char.isalnum() or char == "_" for char in username):
+                self._bot_username = username
+                return username
+        except Exception as exc:  # noqa: BLE001
+            # خطای مجوز دائمی است؛ بقیه‌ی خطاها در درخواست بعدی دوباره امتحان می‌شوند.
+            self._bot_username_checked = (
+                isinstance(exc, TelegramError) and exc.status_code == 401
+            )
+            log.warning("نام کاربری بات از تلگرام دریافت نشد؛ دکمه‌ی گفت‌وگو از مسیر جایگزین استفاده می‌کند: %s", exc)
+        return None
 
     def poll_channel_posts(self) -> list[RawItem]:
         return self.db.pending_telegram_posts(
@@ -245,25 +278,50 @@ class TelegramBot:
         if new_continuations:
             self._message_continuations[int(message_id)] = new_continuations
 
-    def answer_callback(self, callback_id: str, text: str, show_alert: bool = False) -> None:
+    def answer_callback(
+        self,
+        callback_id: str,
+        text: str,
+        show_alert: bool = False,
+        url: str | None = None,
+    ) -> None:
         if self.dry_run or not self.token:
             return
+        payload = {
+            "callback_query_id": callback_id,
+            "text": text,
+            "show_alert": show_alert,
+        }
+        if url:
+            payload["url"] = url
         try:
-            self._call(
-                "answerCallbackQuery",
-                {"callback_query_id": callback_id, "text": text, "show_alert": show_alert},
-            )
+            self._call("answerCallbackQuery", payload)
         except TelegramError as exc:
             log.debug("answerCallbackQuery: %s", exc)
 
     # ── کیبورد ───────────────────────────────────────────────
+    def news_chat_keyboard(self, event_id: int, url: str = "") -> list:
+        rows = []
+        if self._news_chat_enabled:
+            username = self._resolve_bot_username()
+            if username:
+                chat_url = f"https://t.me/{username}?start=chat_{int(event_id)}"
+                rows.append([{"text": "💬 گفت‌وگو درباره‌ی خبر", "url": chat_url}])
+            else:
+                rows.append([{
+                    "text": "💬 گفت‌وگو درباره‌ی خبر",
+                    "callback_data": f"chat:{int(event_id)}",
+                }])
+        if url.startswith("http"):
+            rows.append([{"text": "🔗 متن اصلی", "url": url}])
+        return rows
+
     def feedback_keyboard(self, event_id: int, url: str = "") -> list:
         rows = [[
             {"text": "👍 مفید", "callback_data": f"fb:up:{event_id}"},
             {"text": "👎 بی‌ربط", "callback_data": f"fb:down:{event_id}"},
         ]]
-        if url.startswith("http"):
-            rows.append([{"text": "🔗 متن اصلی", "url": url}])
+        rows.extend(self.news_chat_keyboard(event_id, url))
         return rows
 
     # ── شنونده ───────────────────────────────────────────────
@@ -273,6 +331,8 @@ class TelegramBot:
             return
         if self._thread and self._thread.is_alive():
             return
+        if self._news_chat_enabled:
+            self._resolve_bot_username()
         self._thread = threading.Thread(
             target=self._listen_loop, name="telegram-listener", daemon=True
         )
@@ -294,6 +354,14 @@ class TelegramBot:
                 )
                 if self.health:
                     self.health.mark_poll("telegram_bot")
+                prune_sessions = getattr(self.db, "prune_news_chat_sessions", None)
+                if callable(prune_sessions):
+                    try:
+                        prune_sessions(
+                            float(self.cfg.get("news_chat.session_ttl_minutes", 120))
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("پاک‌سازی نشست‌های چت خبری ناموفق بود: %s", exc)
             except TelegramError as exc:
                 if exc.status_code == 409:
                     log.error(
@@ -338,10 +406,25 @@ class TelegramBot:
         if not message:
             return
         chat_id = str(message["chat"]["id"])
+        sender = message.get("from") or {}
+        user_id = str(sender.get("id") or chat_id)
         text = (message.get("text") or "").strip()
-        command = text.split()[0].split("@")[0].lower() if text else ""
+        parts = text.split(maxsplit=1)
+        command = parts[0].split("@")[0].lower() if parts else ""
+        argument = parts[1].strip() if len(parts) > 1 else ""
 
         if command == "/start":
+            if argument.startswith("chat_"):
+                if (message.get("chat") or {}).get("type") != "private":
+                    self.send("برای حفظ حریم خصوصی، گفت‌وگوی خبری را در پیام خصوصی بات ادامه بده.", chat_id=chat_id)
+                    return
+                event_id_text = argument.removeprefix("chat_").strip()
+                if event_id_text.isdigit():
+                    self._start_news_chat(chat_id, user_id, int(event_id_text))
+                else:
+                    self.send("پیوند گفت‌وگوی خبر معتبر نیست.", chat_id=chat_id)
+                return
+            # شروع گفت‌وگوی خبری از deep-link نباید مقصد انتشار عمومی را عوض کند.
             self.db.kv_set("chat_id", chat_id)
             self.send(
                 "✅ ثبت شد.\nاین بات اخبار حریم هوایی ایران، فرودگاه‌های مهرآباد و امام خمینی "
@@ -350,6 +433,8 @@ class TelegramBot:
                 "/status — وضعیت زنده و سلامت منابع\n"
                 "/last — آخرین خبرهای ثبت‌شده\n"
                 "/hashtags — هشتگ‌های پایش‌شده\n"
+                "💬 برای پرسش درباره‌ی خبر، دکمه‌ی «گفت‌وگو درباره‌ی خبر» را بزن\n"
+                "/stopchat — پایان گفت‌وگوی خبری\n"
                 "/wrong — روی خبر اشتباه ریپلای کن و بزن تا اصلاح شود\n"
                 "/help — راهنما",
                 chat_id=chat_id,
@@ -368,6 +453,8 @@ class TelegramBot:
                 "/status — وضعیت زنده و سلامت فیدها\n"
                 "/last — ۵ رخداد آخر\n"
                 "/hashtags — هشتگ‌های پایش‌شده\n"
+                "💬 دکمه‌ی «گفت‌وگو درباره‌ی خبر» زیر هر خبر چت را شروع می‌کند\n"
+                "/stopchat — پایان گفت‌وگوی خبری\n"
                 "/wrong — ریپلای روی خبر اشتباه",
                 chat_id=chat_id,
             )
@@ -438,6 +525,21 @@ class TelegramBot:
             self.send("\n".join(lines), chat_id=chat_id)
             return
 
+        if command in {"/stopchat", "/endchat"}:
+            self.db.clear_news_chat_session(chat_id, user_id)
+            self.send("گفت‌وگوی خبری پایان یافت. برای شروع دوباره، دکمه‌ی زیر خبر را بزن.", chat_id=chat_id)
+            return
+
+        if command == "/chat":
+            if (message.get("chat") or {}).get("type") != "private":
+                self.send("برای حفظ حریم خصوصی، گفت‌وگوی خبری فقط در پیام خصوصی بات انجام می‌شود.", chat_id=chat_id)
+                return
+            if not argument.isdigit():
+                self.send("برای شروع، دکمه‌ی «گفت‌وگو درباره‌ی خبر» زیر خبر را بزن.", chat_id=chat_id)
+                return
+            self._start_news_chat(chat_id, user_id, int(argument))
+            return
+
         if command == "/wrong":
             replied = message.get("reply_to_message")
             if not replied:
@@ -456,6 +558,127 @@ class TelegramBot:
             )
             self.send("❌ خبر اصلاح شد و منبعش برای بازبینی علامت خورد.", chat_id=chat_id)
             return
+
+        self._handle_news_chat_message(chat_id, user_id, text)
+
+    def _send_news_chat_message(self, text: str, chat_id: str) -> bool:
+        try:
+            self.send(text, chat_id=chat_id)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ارسال پیام گفت‌وگوی خبری به تلگرام ناموفق بود: %s", exc)
+            return False
+
+    def _start_news_chat(self, chat_id: str, user_id: str, event_id: int) -> bool:
+        if not self._news_chat_enabled or not self._news_chat_handler:
+            self._send_news_chat_message("گفت‌وگوی هوشمند فعلاً فعال نیست؛ تنظیم LLM را بررسی کنید.", chat_id)
+            return False
+        event = self.db.get_event(int(event_id))
+        if not event:
+            self._send_news_chat_message("خبر موردنظر دیگر در دسترس نیست.", chat_id)
+            return False
+
+        title = html.escape(str(event["title_fa"] or "خبر بدون تیتر"))
+        intro = (
+            f"💬 <b>گفت‌وگو درباره‌ی خبر {util.fa_digits(event_id)}</b>\n"
+            f"<i>{title}</i>\n\n"
+            "سؤالت را همین‌جا بفرست؛ پاسخ فقط بر اساس متن همین خبر و گفت‌وگوی اخیر خواهد بود.\n"
+            "برای پاسخ، متن خبر و پرسش‌ها به سرویس LLM تنظیم‌شده فرستاده می‌شوند.\n"
+            "پایان گفت‌وگو: /stopchat"
+        )
+        if not self._send_news_chat_message(intro, chat_id):
+            return False
+        self.db.save_news_chat_session(chat_id, user_id, int(event_id), [])
+        return True
+
+    def _handle_news_chat_message(self, chat_id: str, user_id: str, text: str) -> bool:
+        if not self._news_chat_enabled or not text or text.startswith("/"):
+            return False
+        ttl = float(self.cfg.get("news_chat.session_ttl_minutes", 120))
+        session = self.db.get_news_chat_session(chat_id, user_id, max_age_minutes=ttl)
+        if not session:
+            return False
+        if not callable(self._news_chat_handler):
+            self.db.clear_news_chat_session(chat_id, user_id)
+            self._send_news_chat_message("گفت‌وگوی هوشمند فعلاً فعال نیست؛ تنظیم LLM را بررسی کنید.", chat_id)
+            return True
+
+        max_question_chars = max(100, int(self.cfg.get("news_chat.max_question_chars", 2000)))
+        if len(text) > max_question_chars:
+            self._send_news_chat_message(
+                f"سؤال خیلی بلند است؛ لطفاً آن را به کمتر از {util.fa_digits(max_question_chars)} نویسه برسان.",
+                chat_id,
+            )
+            return True
+
+        event = self.db.get_event(int(session["event_id"]))
+        if not event:
+            self.db.clear_news_chat_session(chat_id, user_id)
+            self._send_news_chat_message("خبر دیگر در دسترس نیست؛ گفت‌وگو پایان یافت.", chat_id)
+            return True
+
+        history = session.get("history") or []
+        self._send_news_chat_message("⏳ سؤال دریافت شد؛ دارم بر اساس متن خبر پاسخ می‌دهم…", chat_id)
+        try:
+            answer = self._news_chat_handler(dict(event), text, history)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("پاسخ LLM برای گفت‌وگوی رخداد %d ناموفق بود: %s", session["event_id"], exc)
+            self._send_news_chat_message("پاسخ فعلاً آماده نشد. کمی بعد دوباره تلاش کن.", chat_id)
+            return True
+
+        history = [
+            *history,
+            {"role": "user", "content": text},
+            {"role": "assistant", "content": str(answer)},
+        ][-12:]
+        self.db.save_news_chat_session(chat_id, user_id, int(session["event_id"]), history)
+        self._send_news_chat_message(
+            f"💬 پاسخ درباره‌ی خبر {util.fa_digits(session['event_id'])}:\n\n"
+            f"{html.escape(str(answer))}\n\nبرای پایان گفت‌وگو: /stopchat",
+            chat_id,
+        )
+        return True
+
+    def _handle_news_chat_callback(self, callback: dict, event_id: int) -> None:
+        callback_id = callback.get("id", "")
+        sender = callback.get("from") or {}
+        user_id = str(sender.get("id") or "")
+        if not user_id:
+            self.answer_callback(callback_id, "شناسه‌ی کاربر در دسترس نیست.", show_alert=True)
+            return
+
+        message = callback.get("message") or {}
+        chat = message.get("chat") or {}
+        if chat.get("type") == "private":
+            chat_id = str(chat.get("id") or user_id)
+            try:
+                started = self._start_news_chat(chat_id, user_id, event_id)
+            except TelegramError as exc:
+                log.warning("شروع گفت‌وگوی رخداد %d در DM تلگرام ناموفق بود: %s", event_id, exc)
+                started = False
+            self.answer_callback(
+                callback_id,
+                "گفت‌وگو در همین چت شروع شد." if started else "گفت‌وگو شروع نشد.",
+                show_alert=not started,
+            )
+            return
+
+        # اگر پیام خبر در کانال/گروه است، ادامه‌ی گفت‌وگو را به DM کاربر می‌بریم.
+        try:
+            started = self._start_news_chat(user_id, user_id, event_id)
+            if not started:
+                self.answer_callback(callback_id, "گفت‌وگو شروع نشد.", show_alert=True)
+                return
+            self.answer_callback(callback_id, "پیام خصوصی بات را بررسی کن.")
+        except TelegramError:
+            username = self._resolve_bot_username()
+            url = f"https://t.me/{username}?start=chat_{event_id}" if username else None
+            self.answer_callback(
+                callback_id,
+                "برای ادامه، گفت‌وگو را در پیام خصوصی بات شروع کن.",
+                show_alert=True,
+                url=url,
+            )
 
     def _handle_channel_post(self, message: dict, update_id: int | str | None = None) -> None:
         if not self._channel_monitor_enabled:
@@ -510,14 +733,20 @@ class TelegramBot:
         data = callback.get("data") or ""
         callback_id = callback.get("id", "")
         parts = data.split(":")
+        if len(parts) == 2 and parts[0] == "chat":
+            if parts[1].isdigit():
+                self._handle_news_chat_callback(callback, int(parts[1]))
+            else:
+                self.answer_callback(callback_id, "شناسه‌ی خبر نامعتبر است.", show_alert=True)
+            return
         if len(parts) != 3 or parts[0] != "fb":
             self.answer_callback(callback_id, "نامشخص")
             return
-        verdict, event_id = parts[1], parts[2]
-        if verdict not in {"up", "down"}:
+        verdict, event_id_text = parts[1], parts[2]
+        if verdict not in {"up", "down"} or not event_id_text.isdigit():
             self.answer_callback(callback_id, "نامشخص")
             return
-        self.db.add_feedback(int(event_id), verdict)
+        self.db.add_feedback(int(event_id_text), verdict)
         self.answer_callback(
             callback_id,
             "ثبت شد ✅" if verdict == "up" else "ثبت شد — این منبع بازبینی می‌شود",
