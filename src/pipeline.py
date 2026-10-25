@@ -113,38 +113,88 @@ class Pipeline:
         log.info("منتشر شد [%s/%s] %s", cls.severity, cls.category, item.title[:70])
         return "published"
 
+    def _recipients(self) -> list[str]:
+        """گیرنده‌های فعلی؛ برای بات‌های ساده (تست) به همان گیرنده‌ی تکی برمی‌گردد."""
+        if hasattr(self.bot, "recipients"):
+            return list(self.bot.recipients())
+        chat_id = self.bot.chat_id() if hasattr(self.bot, "chat_id") else None
+        return [str(chat_id)] if chat_id else []
+
     def _deliver_event(self, event) -> bool:
+        """ارسال رخداد به همه‌ی گیرنده‌ها. True فقط وقتی همه گرفته باشند.
+
+        هر گیرنده پیام ریشه‌ی خودش را می‌گیرد و مرجعش جدا ذخیره می‌شود؛
+        اگر ارسال به یکی شکست بخورد، بقیه گرفته‌اند و flush بعدی فقط
+        همان جامانده‌ها را دوباره می‌فرستد.
+        """
         event_id = int(event["id"])
         text = formatter.format_event(event, self.cfg)
         if self.cfg.get("notifications.include_feedback_buttons", True):
             keyboard = self.bot.feedback_keyboard(event_id, event["primary_url"] or "")
         else:
             keyboard = None
-        try:
-            message_id = self.bot.send(
-                text,
-                silent=self._silent(event["severity"]),
-                keyboard=keyboard,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("ارسال تلگرام برای رخداد %d ناموفق بود: %s", event_id, exc)
+
+        if self.cfg.dry_run:
+            try:
+                self.bot.send(text, silent=self._silent(event["severity"]), keyboard=keyboard)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ارسال تلگرام برای رخداد %d ناموفق بود: %s", event_id, exc)
+                return False
+            return True
+
+        recipients = self._recipients()
+        if not recipients:
+            log.warning("گیرنده‌ای ثبت نشده — یک بار در بات /start بزنید یا TELEGRAM_CHAT_ID را در .env بگذارید")
             return False
 
-        chat_id = self.bot.chat_id()
-        if message_id and chat_id:
-            self.db.save_message_ref(event_id, chat_id, message_id)
-            if self.health:
-                self.health.mark_publish()
-            return True
-        return bool(self.cfg.dry_run)
+        delivered = self.db.message_refs(event_id)
+        all_ok = True
+        for chat_id in recipients:
+            if chat_id in delivered:
+                continue
+            try:
+                message_id = self.bot.send(
+                    text,
+                    chat_id=chat_id,
+                    silent=self._silent(event["severity"]),
+                    keyboard=keyboard,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "ارسال تلگرام رخداد %d به گیرنده %s ناموفق بود: %s",
+                    event_id, chat_id, exc,
+                )
+                all_ok = False
+                continue
+            if message_id:
+                first_delivery = not delivered
+                self.db.save_message_ref(event_id, chat_id, int(message_id))
+                delivered[chat_id] = int(message_id)
+                if first_delivery and self.health:
+                    self.health.mark_publish()
+            else:
+                all_ok = False
+        return all_ok
 
     def flush_unsent(self) -> int:
-        """ارسال مجدد رخدادهای تازه‌ای که به خاطر قطعی موقت شبکه یا نبود گیرنده جا مانده‌اند."""
-        if self.cfg.dry_run or not self.bot.configured or not self.bot.chat_id():
+        """ارسال رخدادهای تازه‌ای که همه‌ی گیرنده‌ها هنوز نگرفته‌اند.
+
+        هم رخدادهای کاملاً ارسال‌نشده را پوشش می‌دهد، هم ارسال ناقص
+        (مثلاً مشترک تازه‌ای که بعد از انتشار رخداد /start زده).
+        """
+        if self.cfg.dry_run or not self.bot.configured or not self._recipients():
             return 0
         window = float(self.cfg.get("app.dedupe_window_hours", 6))
+        recipients = set(self._recipients())
         sent = 0
-        for event in self.db.unsent_events(hours=window, limit=5):
+        attempted = 0
+        for event in reversed(self.db.recent_events(window)):
+            if attempted >= 5:
+                break
+            missing = recipients - set(self.db.message_refs(int(event["id"])))
+            if not missing or event["corrected"]:
+                continue
+            attempted += 1
             if self._deliver_event(event):
                 sent += 1
         if sent:
@@ -176,26 +226,29 @@ class Pipeline:
         if not refreshed:
             return "update-missing"
 
-        if refreshed["root_message_id"] and new_source:
+        # ویرایش پیام ریشه و ریپلای تأیید، برای هر گیرنده روی پیام خودش
+        refs = self.db.message_refs(event_id) if new_source else {}
+        for chat_id, root_id in refs.items():
             try:
                 self.bot.edit(
-                    int(refreshed["root_message_id"]),
+                    int(root_id),
                     formatter.format_event(refreshed, self.cfg),
-                    chat_id=refreshed["chat_id"],
+                    chat_id=chat_id,
                     keyboard=self.bot.feedback_keyboard(event_id, refreshed["primary_url"]),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.debug("ویرایش پیام ریشه ناموفق: %s", exc)
 
-        if new_source and int(refreshed["sources_count"]) <= 3 and refreshed["root_message_id"]:
-            try:
-                self.bot.send(
-                    formatter.format_update(refreshed, item.source_name),
-                    reply_to=int(refreshed["root_message_id"]),
-                    silent=self._silent(refreshed["severity"]),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc)
+            if int(refreshed["sources_count"]) <= 3:
+                try:
+                    self.bot.send(
+                        formatter.format_update(refreshed, item.source_name),
+                        chat_id=chat_id,
+                        reply_to=int(root_id),
+                        silent=self._silent(refreshed["severity"]),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc)
 
         log.info("به‌روزرسانی [%s] %s", event_id, item.title[:70])
         return "updated"
