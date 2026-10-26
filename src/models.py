@@ -43,6 +43,9 @@ class Classification:
     airlines: list[str] = field(default_factory=list)
     airports: list[str] = field(default_factory=list)
     matched: list[str] = field(default_factory=list)
+    # موضوع اصلی است یا فقط مرتبطِ حاشیه‌ای؟ فقط موضوع اصلی برای کاربر ارسال
+    # می‌شود؛ بقیه در دیتابیس ثبت می‌شوند (برای /last و خوشه‌بندی) ولی پوش نمی‌شوند.
+    publishable: bool = False
 
     @property
     def entity_key(self) -> str:

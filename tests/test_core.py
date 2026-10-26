@@ -288,6 +288,50 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(result.relevant)
         self.assertEqual(result.category, "context")
 
+    def test_incidental_body_mention_is_not_publishable(self):
+        """شکایت کاربر: خبر خودرو که در بدنه‌اش اتفاقی فرودگاه/مسافر آمده پوش می‌شد."""
+        result = self.classifier.classify(
+            self.item(
+                "Iran unveils new domestic car model",
+                "The minister said flights of fancy aside, the airport city project "
+                "and passenger terminal were discussed at the trade fair.",
+            )
+        )
+        self.assertTrue(result.relevant)       # ثبت می‌شود
+        self.assertFalse(result.publishable)   # ولی برای کاربر نمی‌رود
+
+    def test_airline_livery_with_incidental_iran_is_not_publishable(self):
+        result = self.classifier.classify(
+            self.item(
+                "Turkish Airlines unveils new livery",
+                "The airline painted an aircraft. Iran was mentioned in a list "
+                "of destinations served.",
+            )
+        )
+        self.assertFalse(result.publishable)
+
+    def test_main_topic_is_publishable(self):
+        result = self.classifier.classify(
+            self.item("Iran says airspace closed over Tehran FIR", "OIIX NOTAM issued")
+        )
+        self.assertTrue(result.publishable)
+
+    def test_geopolitics_with_generic_flight_mention_is_not_publishable(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran says war rhetoric is rising in the region",
+                "Officials spoke about the war and attacks but flights operate normally.",
+            )
+        )
+        self.assertFalse(result.publishable)
+
+    def test_hashtag_pair_is_on_topic(self):
+        result = self.classifier.classify(
+            self.item("فوری #ایران #NOTAM حریم هوایی بسته شد", "")
+        )
+        self.assertTrue(result.relevant)
+        self.assertTrue(result.publishable)
+
     def test_persian_cancellation_is_relevant(self):
         result = self.classifier.classify(
             self.item("لغو پروازها به تهران به‌دلیل بسته شدن حریم هوایی")
@@ -347,7 +391,39 @@ class CollectorTests(unittest.TestCase):
 
         config = load_config(dry_run=True)
         jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
-        self.assertEqual([job.name for job in jobs], ["rss"])
+        # فقط rss و gdelt (متن‌باز، بدون کلید) پیش‌فرض فعال‌اند
+        self.assertEqual([job.name for job in jobs], ["rss", "gdelt"])
+
+    def test_gdelt_articles_become_items(self):
+        from src.collectors import GdeltCollector
+
+        collector = GdeltCollector(load_config())
+        items = collector._to_items({
+            "articles": [
+                {
+                    "url": "https://example.com/a1",
+                    "title": "Iran closes airspace over Tehran",
+                    "domain": "example.com",
+                    "language": "English",
+                    "seendate": "20261026T120000Z",
+                },
+                {"url": "https://example.com/a1", "title": "duplicate", "domain": "example.com"},
+                {"url": "", "title": "no url", "domain": "x"},
+            ]
+        })
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].kind, "gdelt")
+        self.assertEqual(items[0].source_id, "gdelt_example_com")
+        self.assertIsNotNone(items[0].published_at)
+
+    def test_x_queries_include_hashtags(self):
+        from src.airlines import AirlineIndex
+        from src.collectors import XCollector
+
+        config = load_config()
+        collector = XCollector(config, AirlineIndex(config.airlines))
+        queries = collector.queries()
+        self.assertTrue(any("#" in q for q in queries))
 
 
 class HealthTests(unittest.TestCase):
@@ -947,6 +1023,63 @@ class PipelineRecoveryTests(unittest.TestCase):
                 sent = pipeline.flush_unsent()
                 self.assertEqual(sent, 1)
                 self.assertEqual(len(db.unsent_events()), 0)
+            finally:
+                db.close()
+
+
+class OffTopicGateTests(unittest.TestCase):
+    def test_off_topic_event_is_stored_but_not_sent(self):
+        import tempfile
+
+        from src.db import Database
+        from src.pipeline import Pipeline
+
+        config = load_config(dry_run=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            try:
+
+                class CountingBot:
+                    configured = True
+
+                    def __init__(self):
+                        self.sent = []
+
+                    def recipients(self):
+                        return ["111"]
+
+                    def chat_id(self):
+                        return "111"
+
+                    def feedback_keyboard(self, event_id, url=""):
+                        return []
+
+                    def send(self, text, **kwargs):
+                        self.sent.append(text)
+                        return 42
+
+                    def edit(self, *args, **kwargs):
+                        pass
+
+                bot = CountingBot()
+                pipeline = Pipeline(config, db, bot)
+                item = RawItem(
+                    source_id="en_example",
+                    source_name="Example",
+                    source_url="https://example.com/rss",
+                    title="Iran unveils new domestic car model",
+                    body=(
+                        "The minister said flights of fancy aside, the airport city "
+                        "project and passenger terminal were discussed."
+                    ),
+                    url="https://example.com/car",
+                    lang="en",
+                    country="INTL",
+                )
+                outcome = pipeline.process(item)
+                self.assertEqual(outcome, "off-topic")
+                self.assertEqual(bot.sent, [])
+                self.assertEqual(db.stats()["events"], 1)
             finally:
                 db.close()
 

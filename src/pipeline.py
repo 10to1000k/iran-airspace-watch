@@ -104,6 +104,7 @@ class Pipeline:
             "numbers_ok": 1 if translation.numbers_ok else 0,
             "primary_url": item.url,
             "primary_source": item.source_name,
+            "publishable": 1 if cls.publishable else 0,
         })
         if not created:
             # رقیب زودتر ساخته — مثل به‌روزرسانی رفتار می‌کنیم
@@ -114,6 +115,11 @@ class Pipeline:
         # رخداد ساخته بماند و flush_unsent در چرخه‌ی بعدی آن را ارسال کند.
         self.db.attach_item_to_event(item.source_id, fp, event_id)
         event = self.db.get_event(event_id)
+        if not cls.publishable:
+            # مرتبط هست ولی موضوع اصلی نیست: ثبت می‌شود (در /last و خوشه‌بندی
+            # می‌آید) ولی برای کاربر پوش نمی‌شود تا خبر اشتباهی نرود.
+            log.info("ثبت بدون ارسال (خارج از موضوع اصلی): %s", item.title[:70])
+            return "off-topic"
         if not self._deliver_event(event):
             log.warning("رخداد %d ثبت شد ولی ارسال تلگرام به چرخه‌ی بعد موکول شد", event_id)
             return "queued"
@@ -198,6 +204,11 @@ class Pipeline:
         for event in reversed(self.db.recent_events(window)):
             if attempted >= 5:
                 break
+            try:
+                if not event["publishable"]:
+                    continue
+            except (IndexError, KeyError):
+                pass
             missing = recipients - set(self.db.message_refs(int(event["id"])))
             if not missing or event["corrected"]:
                 continue

@@ -91,6 +91,14 @@ class Database:
         with self._lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            # مهاجرت سبک برای دیتابیس‌های قبلی: ستون publishable
+            cols = {
+                row[1] for row in self.conn.execute("PRAGMA table_info(events)")
+            }
+            if "publishable" not in cols:
+                self.conn.execute(
+                    "ALTER TABLE events ADD COLUMN publishable INTEGER NOT NULL DEFAULT 1"
+                )
             self.conn.commit()
 
     def close(self) -> None:
@@ -217,6 +225,7 @@ class Database:
             "numbers_ok": int(data.get("numbers_ok", 1)),
             "primary_url": data.get("primary_url", ""),
             "primary_source": data.get("primary_source", ""),
+            "publishable": int(data.get("publishable", 1)),
             "first_seen": now,
             "last_updated": now,
         }
