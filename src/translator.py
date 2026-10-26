@@ -192,6 +192,61 @@ class Translator:
                     break
         raise RuntimeError(f"ترجمه ناموفق بود: {last_error}")
 
+    # ── گفت‌وگو درباره‌ی یک خبر ───────────────────────────────
+    def answer_about_event(self, event, items, question: str, history=None) -> str:
+        """پاسخ پرسش کاربر درباره‌ی یک رخداد مشخص، فقط بر پایه‌ی متن خبر."""
+        if not self.enabled:
+            return (
+                "قابلیت گفت‌وگو فعال نیست؛ هیچ کلید LLM تنظیم نشده است "
+                "(GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)."
+            )
+
+        context_lines = [
+            f"تیتر: {event['title_fa'] or ''}",
+            f"متن خبر: {event['body_fa'] or ''}",
+            f"دسته/شدت: {event['category'] or ''}/{event['severity'] or ''}",
+            f"زمان: {event['first_seen'] or ''}",
+            f"منبع اصلی: {event['primary_source'] or ''} {event['primary_url'] or ''}".strip(),
+            f"تعداد منابع: {event['sources_count'] or 1}",
+        ]
+        if event["airlines"]:
+            context_lines.append(f"ایرلاین‌ها: {event['airlines']}")
+        if event["countries"]:
+            context_lines.append(f"کشورها: {event['countries']}")
+        for item in items or []:
+            snippet = f"{item['title'] or ''} — {(item['body'] or '')[:700]}".strip()
+            if snippet:
+                context_lines.append(f"متن منبع ({item['source_name']}): {snippet}")
+        context = "\n".join(context_lines)[:5000]
+
+        history_block = ""
+        for turn in (history or [])[-6:]:
+            history_block += f"کاربر: {turn.get('q', '')}\nدستیار: {turn.get('a', '')}\n"
+
+        system = (
+            "You are an assistant answering a user's questions about ONE specific "
+            "aviation news event about Iranian airspace.\n"
+            "HARD RULES:\n"
+            "1. Answer in Persian (Farsi), unless the user writes in another language.\n"
+            "2. News facts must come ONLY from the provided event context. Never invent "
+            "numbers, dates, names, flight numbers, or statuses.\n"
+            "3. If the context does not answer the question, say exactly that the news "
+            "does not mention it («در متن خبر به این موضوع اشاره‌ای نشده است»).\n"
+            "4. You may briefly explain general aviation terms (NOTAM, FIR, etc.), but "
+            "clearly mark that part as general information, not news.\n"
+            "5. Be concise and direct. Plain text only, no markdown, no HTML."
+        )
+        user_content = (
+            f"EVENT CONTEXT:\n{context}\n\n"
+            f"CONVERSATION SO FAR:\n{history_block or '(none)'}\n\n"
+            f"USER QUESTION:\n{question}"
+        )
+        try:
+            return self._chat(user_content, system) or "پاسخی از مدل برنگشت؛ دوباره بپرسید."
+        except Exception as exc:  # noqa: BLE001
+            log.error("گفت‌وگوی LLM ناموفق بود: %s", exc)
+            return "فعلاً همه‌ی سرویس‌های رایگان پاسخ ندادند؛ چند دقیقه دیگر دوباره بپرسید."
+
     # ── API عمومی ────────────────────────────────────────────
     def translate_item(
         self,

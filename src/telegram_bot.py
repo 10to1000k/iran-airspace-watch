@@ -34,6 +34,7 @@ class TelegramBot:
         self.dry_run = config.dry_run
         self._stop = threading.Event()
         self._conflict_count = 0
+        self.chat_responder = None  # Pipeline ست می‌کند: (event, question, history) -> str
         self._thread: threading.Thread | None = None
         self._on_ready_callbacks: list = []
 
@@ -266,10 +267,78 @@ class TelegramBot:
         rows = [[
             {"text": "👍 مفید", "callback_data": f"fb:up:{event_id}"},
             {"text": "👎 بی‌ربط", "callback_data": f"fb:down:{event_id}"},
+        ], [
+            {"text": "💬 گفت‌وگو درباره‌ی خبر", "callback_data": f"ask:{event_id}"},
         ]]
         if url.startswith("http"):
             rows.append([{"text": "🔗 متن اصلی", "url": url}])
         return rows
+
+    # ── گفت‌وگو درباره‌ی خبر ──────────────────────────────────
+    CHAT_TTL_SECONDS = 2 * 3600
+
+    def set_chat_responder(self, responder) -> None:
+        self.chat_responder = responder
+
+    def _activate_chat(self, chat_id: str, event_id: int) -> None:
+        self.db.kv_set(f"chat_event:{chat_id}", str(event_id))
+        self.db.kv_set(f"chat_since:{chat_id}", str(int(time.time())))
+
+    def _deactivate_chat(self, chat_id: str) -> None:
+        self.db.kv_delete(f"chat_event:{chat_id}")
+        self.db.kv_delete(f"chat_since:{chat_id}")
+
+    def _active_chat_event(self, chat_id: str) -> int | None:
+        raw = self.db.kv_get(f"chat_event:{chat_id}")
+        if not raw:
+            return None
+        since = int(self.db.kv_get(f"chat_since:{chat_id}", "0") or 0)
+        if since and time.time() - since > self.CHAT_TTL_SECONDS:
+            self._deactivate_chat(chat_id)
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _chat_history(self, chat_id: str, event_id: int) -> list:
+        try:
+            history = json.loads(
+                self.db.kv_get(f"chat_history:{chat_id}:{event_id}", "[]") or "[]"
+            )
+        except (ValueError, TypeError):
+            return []
+        return history if isinstance(history, list) else []
+
+    def _save_chat_turn(self, chat_id: str, event_id: int, question: str, answer: str) -> None:
+        history = self._chat_history(chat_id, event_id)
+        history.append({"q": question[:500], "a": answer[:1500]})
+        self.db.kv_set(
+            f"chat_history:{chat_id}:{event_id}",
+            json.dumps(history[-6:], ensure_ascii=False),
+        )
+
+    def _route_chat_message(self, chat_id: str, text: str) -> bool:
+        """اگر کاربر در حالت گفت‌وگوست، پرسش را به LLM می‌دهد. True یعنی مصرف شد."""
+        event_id = self._active_chat_event(chat_id)
+        if event_id is None:
+            return False
+        event = self.db.get_event(event_id)
+        if not event:
+            self._deactivate_chat(chat_id)
+            self.send("آن خبر دیگر در دسترس نیست؛ حالت گفت‌وگو بسته شد.", chat_id=chat_id)
+            return True
+        if self.chat_responder is None:
+            self.send(
+                "قابلیت گفت‌وگو در این نمونه فعال نیست (کلید LLM تنظیم نشده).",
+                chat_id=chat_id,
+            )
+            return True
+        history = self._chat_history(chat_id, event_id)
+        answer = self.chat_responder(event, text, history)
+        self._save_chat_turn(chat_id, event_id, text, answer)
+        self.send(answer, chat_id=chat_id)
+        return True
 
     # ── شنونده ───────────────────────────────────────────────
     def start_listener(self) -> None:
@@ -354,6 +423,16 @@ class TelegramBot:
         text = (message.get("text") or "").strip()
         command = text.split()[0].split("@")[0].lower() if text else ""
 
+        if command in ("/endchat", "/cancel"):
+            self._deactivate_chat(chat_id)
+            self.send("گفت‌وگو پایان یافت.", chat_id=chat_id)
+            return
+
+        # در حالت گفت‌وگو، پیام متنیِ بدون دستور پرسشِ کاربر درباره‌ی خبر است
+        if text and not text.startswith("/"):
+            if self._route_chat_message(chat_id, text):
+                return
+
         if command == "/start":
             # چندگیرنده: ثبت مشترک تازه، گیرنده‌های قبلی را حذف نمی‌کند
             self.subscribe(chat_id)
@@ -364,6 +443,7 @@ class TelegramBot:
                 "/status — وضعیت زنده و سلامت منابع\n"
                 "/last — آخرین خبرهای ثبت‌شده\n"
                 "/wrong — روی خبر اشتباه ریپلای کن و بزن تا اصلاح شود\n"
+                "💬 با دکمه‌ی «گفت‌وگو درباره‌ی خبر» زیر هر خبر، می‌توانی درباره‌اش از LLM بپرسی\n"
                 "/stop — لغو دریافت خبرها\n"
                 "/help — راهنما",
                 chat_id=chat_id,
@@ -463,6 +543,29 @@ class TelegramBot:
         data = callback.get("data") or ""
         callback_id = callback.get("id", "")
         parts = data.split(":")
+
+        if len(parts) == 2 and parts[0] == "ask":
+            chat = (callback.get("message") or {}).get("chat") or {}
+            sender = callback.get("from") or {}
+            chat_id = str(chat.get("id") or sender.get("id") or "")
+            try:
+                event_id = int(parts[1])
+            except ValueError:
+                event_id = 0
+            event = self.db.get_event(event_id) if event_id else None
+            if not event or not chat_id:
+                self.answer_callback(callback_id, "این خبر دیگر در دسترس نیست")
+                return
+            self._activate_chat(chat_id, event_id)
+            self.answer_callback(callback_id, "حالت گفت‌وگو فعال شد 💬")
+            title = html.escape(util.truncate(event["title_fa"] or "خبر", 90))
+            self.send(
+                f"💬 <b>گفت‌وگو درباره‌ی این خبر فعال شد:</b>\n{title}\n\n"
+                "هر سؤالی درباره‌ی همین خبر داری بپرس؛ پاسخ فقط بر اساس متن خبر و منابعش داده می‌شود.\n"
+                "برای پایان گفت‌وگو: /endchat",
+                chat_id=chat_id,
+            )
+            return
         if len(parts) != 3 or parts[0] != "fb":
             self.answer_callback(callback_id, "نامشخص")
             return
