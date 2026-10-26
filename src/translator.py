@@ -194,7 +194,12 @@ class Translator:
 
     # ── گفت‌وگو درباره‌ی یک خبر ───────────────────────────────
     def answer_about_event(self, event, items, question: str, history=None) -> str:
-        """پاسخ پرسش کاربر درباره‌ی یک رخداد مشخص، فقط بر پایه‌ی متن خبر."""
+        """گفت‌وگوی آزاد با LLM درباره‌ی یک رخداد؛ خبر نقطه‌ی شروع گفت‌وگوست.
+
+        قبلاً مدل فقط اجازه داشت از متن خبر جواب بدهد و هر چیز دیگری را رد
+        می‌کرد؛ حالا گفت‌وگوی واقعی است: زمینه، تحلیل، پیامدها و دانش عمومی
+        هوانوردی هم مجاز است، با این قاعده که ادعای «خبری» از تحلیل جدا شود.
+        """
         if not self.enabled:
             return (
                 "قابلیت گفت‌وگو فعال نیست؛ هیچ کلید LLM تنظیم نشده است "
@@ -224,17 +229,28 @@ class Translator:
             history_block += f"کاربر: {turn.get('q', '')}\nدستیار: {turn.get('a', '')}\n"
 
         system = (
-            "You are an assistant answering a user's questions about ONE specific "
-            "aviation news event about Iranian airspace.\n"
-            "HARD RULES:\n"
-            "1. Answer in Persian (Farsi), unless the user writes in another language.\n"
-            "2. News facts must come ONLY from the provided event context. Never invent "
-            "numbers, dates, names, flight numbers, or statuses.\n"
-            "3. If the context does not answer the question, say exactly that the news "
-            "does not mention it («در متن خبر به این موضوع اشاره‌ای نشده است»).\n"
-            "4. You may briefly explain general aviation terms (NOTAM, FIR, etc.), but "
-            "clearly mark that part as general information, not news.\n"
-            "5. Be concise and direct. Plain text only, no markdown, no HTML."
+            "You are a friendly, knowledgeable assistant chatting with a user about "
+            "ONE specific aviation news event concerning Iranian airspace. This is a "
+            "real conversation anchored on that event, not a quiz limited to its text.\n"
+            "RULES:\n"
+            "1. Answer in Persian (Farsi), unless the user writes in another language. "
+            "Be conversational and helpful, and use the conversation history naturally.\n"
+            "2. Clearly separate two layers when both appear: (الف) «طبق خبر» — facts "
+            "that come from the provided event context; (ب) «زمینه و تحلیل» — your own "
+            "background knowledge, explanations, implications, comparisons, and reasoned "
+            "analysis. Analysis is welcome, speculation must be hedged (احتمالاً، ممکن است).\n"
+            "3. Never present invented numbers, dates, names, flight numbers, or statuses "
+            "as reported news facts. If a specific factual detail is not in the context, "
+            "say the news does not state it, then still help: explain what is generally "
+            "known about the topic, what it usually means, and what to watch next.\n"
+            "4. You may freely discuss: background of the airports/airlines/FIR involved, "
+            "how NOTAMs and airspace closures work, effects on routes and passengers, "
+            "similar past events, and likely scenarios — labelled as general knowledge "
+            "or analysis, not as part of this news report.\n"
+            "5. If the user drifts far from the event, answer briefly and gently steer "
+            "back to the event topic.\n"
+            "6. Plain text only, no markdown, no HTML. Keep answers focused; go deeper "
+            "when the user asks follow-ups."
         )
         user_content = (
             f"EVENT CONTEXT:\n{context}\n\n"

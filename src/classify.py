@@ -55,6 +55,17 @@ class Classifier:
         self._airport_codes = (
             self.settings.get("relevance", {}).get("airport_codes") or []
         )
+        self._negative_title = (
+            self.settings.get("relevance", {}).get("negative_title_keywords") or []
+        )
+        # هشتگ‌های پلتفرم‌ها (تلگرام/X) از config/sources.yaml
+        hashtags = (config.sources or {}).get("hashtags") or {}
+        self._hashtags_iran = [
+            str(tag).lower() for tag in (hashtags.get("iran") or [])
+        ]
+        self._hashtags_aviation = [
+            str(tag).lower() for tag in (hashtags.get("aviation") or [])
+        ]
 
         self._categories: dict[str, list[str]] = {}
         self._base_severity: dict[str, str] = {}
@@ -72,6 +83,31 @@ class Classifier:
     def _hit(text: str, keywords: list[str]) -> bool:
         return any(_contains(text, kw) for kw in keywords)
 
+    @staticmethod
+    def _distinct_hits(text: str, keywords: list[str]) -> list[str]:
+        """کلیدواژه‌های متمایز؛ flight و flights یک مفهوم‌اند و دو بار شمرده نمی‌شوند.
+
+        نسخه‌ی قبلی هر دو را جدا می‌شمرد و یک اشاره‌ی گذرا در بدنه
+        (مثل «flights operate normally») به‌تنهایی آستانه‌ی ربط را رد می‌کرد.
+        """
+        hits: list[str] = []
+        for kw in sorted(keywords, key=len, reverse=True):
+            norm = util.normalize(kw)
+            if not norm or not _contains(text, kw):
+                continue
+            if any(norm in hit or hit in norm for hit in hits):
+                continue
+            hits.append(norm)
+        return hits
+
+    def _hashtag_pair(self, text: str) -> bool:
+        """جفت هشتگ ایران + هوانوردی در پست‌های پلتفرمی نشانه‌ی موضوع اصلی است."""
+        if not self._hashtags_iran or not self._hashtags_aviation:
+            return False
+        return any(tag in text for tag in self._hashtags_iran) and any(
+            tag in text for tag in self._hashtags_aviation
+        )
+
     def _airports_in(self, raw_text: str) -> list[str]:
         """کدهای فرودگاه فقط با حروف بزرگ شمرده می‌شوند.
 
@@ -84,12 +120,20 @@ class Classifier:
                 found.append(code.upper())
         return found
 
-    def _is_relevant(self, text: str, airports: list[str], airlines: list[str]) -> bool:
+    def _is_relevant(
+        self,
+        text: str,
+        airports: list[str],
+        airlines: list[str],
+        hashtag_pair: bool = False,
+    ) -> bool:
         """ایران + هوانوردی، هر دو لازم‌اند.
 
         فقط «ایران» کافی نیست: خبر ورزشی و شهری هم «ایران» دارد.
         «پرواز» تنها هم کافی نیست: «پرواز تیم ملی به فینال» خبر ورزشی است.
         """
+        if hashtag_pair:
+            return True
         if airports:
             return True
         # ایرلاین ایرانی خودش «موجودیت ایرانی» است: خبر «ماهان ایر در گوانگژو»
@@ -125,7 +169,8 @@ class Classifier:
         # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
         airlines = self.airlines.match(raw_text)
 
-        if not self._is_relevant(text, airports, airlines):
+        hashtag_pair = self._hashtag_pair(text)
+        if not self._is_relevant(text, airports, airlines, hashtag_pair):
             return Classification(relevant=False, matched=[])
 
         scores = {
@@ -178,6 +223,15 @@ class Classifier:
             if any(_contains(text, w) for w in words):
                 countries.add(code)
 
+        publishable = self._is_publishable(
+            item=item,
+            category=category,
+            severity=severity,
+            airports=airports,
+            airlines=airlines,
+            hashtag_pair=hashtag_pair,
+        )
+
         return Classification(
             relevant=True,
             category=category,
@@ -186,4 +240,66 @@ class Classifier:
             airlines=airlines,
             airports=airports,
             matched=matched,
+            publishable=publishable,
         )
+
+    def _is_publishable(
+        self,
+        *,
+        item: RawItem,
+        category: str,
+        severity: str,
+        airports: list[str],
+        airlines: list[str],
+        hashtag_pair: bool,
+    ) -> bool:
+        """آیا خبر «موضوع اصلی» است و باید همان لحظه برای کاربر برود؟
+
+        فلسفه: ربط (relevant) یعنی جایی در دنیای ایران+هوانوردی است؛ اما
+        ارسال فوری فقط وقتی است که تیتر یا موجودیت‌های خبر خودشان موضوع
+        اصلی باشند. اشاره‌ی اتفاقی در بدنه (خبر خودرو/سیاست که یک جمله
+        «فرودگاه» دارد) ثبت می‌شود ولی پوش نمی‌شود — شکایت اصلی کاربر
+        از خبرهای اشتباهی همین‌ها بودند.
+        """
+        title_raw = item.title or ""
+        title_text = util.normalize(title_raw)
+        body_text = util.normalize(item.body or "")
+
+        airports_title = self._airports_in(title_raw)
+        airlines_title = self.airlines.match(title_raw)
+        iran_title = self._hit(title_text, self._relevance)
+        strong_title = self._distinct_hits(title_text, self._strong)
+        weak_title = self._distinct_hits(title_text, self._aviation)
+        strong_body = self._distinct_hits(body_text, self._strong)
+        signal_body = self._distinct_hits(body_text, self._airspace_signal)
+
+        publishable = False
+        if airports or any(self.airlines.is_iranian(name) for name in airlines):
+            publishable = True
+        elif hashtag_pair:
+            # پست کوتاه پلتفرمی کلش «تیتر» است؛ جفت هشتگ موضوع را مشخص می‌کند
+            publishable = True
+        elif (
+            airlines
+            and self._hit(util.normalize(item.text or ""), self._region)
+            and self._hit(util.normalize(item.text or ""), self._airspace_signal)
+        ):
+            publishable = True
+        elif iran_title and (strong_title or airlines_title or len(weak_title) >= 2):
+            publishable = True
+        elif airlines_title and iran_title:
+            publishable = True
+        elif (iran_title or airlines_title or airports_title) and signal_body and strong_body:
+            # تیتر موضوع را دارد و بدنه سیگنال واقعی حریم هوایی/لغو/تعلیق دارد
+            publishable = True
+        elif category in ("airspace", "airport", "airline") and severity in (
+            "critical",
+            "important",
+        ) and (strong_title or weak_title or airlines_title or airports_title):
+            publishable = True
+
+        # وتوی موضوعات پرت: ورزش/سرگرمی در تیتر، مگر موجودیت هوانوردی در تیتر باشد
+        if publishable and self._hit(title_text, self._negative_title):
+            if not (airports_title or airlines_title or strong_title):
+                publishable = False
+        return publishable

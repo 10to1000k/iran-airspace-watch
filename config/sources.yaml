@@ -58,11 +58,16 @@ sources:
   - {id: av_aerotime, name: AeroTime,        type: rss, url: "https://www.aerotime.aero/feed", lang: en, country: INTL, tier: 1}
   - {id: av_opsgroup, name: OPSGROUP,        type: rss, url: "https://ops.group/blog/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_flightglobal,name: FlightGlobal, type: rss, url: "https://www.flightglobal.com/rss", lang: en, country: INTL, tier: 1}
-  - {id: av_jacdec,   name: JACDEC,          type: rss, url: "https://www.jacdec.de/feed/", lang: en, country: INTL, tier: 1}
+  # JACDEC از کلاستر OpenShift قابل دسترسی نیست (Network is unreachable — در لاگ زنده‌ی ۱۴۰۵/۰۸/۰۴ دیده شد)
+  - {id: av_jacdec,   name: JACDEC,          type: rss, url: "https://www.jacdec.de/feed/", lang: en, country: INTL, tier: 1, enabled: false}
   - {id: av_airlinegeeks,name: AirlineGeeks, type: rss, url: "https://airlinegeeks.com/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_aviation24,name: Aviation24.be,  type: rss, url: "https://www.aviation24.be/feed/", lang: en, country: INTL, tier: 1}
   # Aviation Herald RSS ندارد (بررسی شد)
   - {id: av_herald,   name: The Aviation Herald, type: rss, url: "https://avherald.com/rss", lang: en, country: INTL, tier: 1, enabled: false}
+  # تازه (۱۴۰۵/۰۸) — هنوز از داخل کلاستر تست نشده‌اند؛ با --check-sources بررسی و در صورت سلامت enabled را بردار
+  - {id: av_aeroglobal,name: Aerospace Global News, type: rss, url: "https://aerospaceglobalnews.com/feed/", lang: en, country: INTL, tier: 1, enabled: false}
+  - {id: av_airways,  name: Airways Magazine, type: rss, url: "https://airwaysmag.com/feed/", lang: en, country: INTL, tier: 1, enabled: false}
+  - {id: av_aviationist,name: The Aviationist, type: rss, url: "https://theaviationist.com/feed/", lang: en, country: INTL, tier: 1, enabled: false}
 
   # ── کشورهایی که خط هوایی‌شان با ایران باز مانده (مهر ۱۴۰۵) ──
   #
@@ -100,6 +105,19 @@ sources:
   # ── منطقه ──────────────────────────────────────────────────
   - {id: me_aljazeera,name: Al Jazeera,      type: rss, url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, country: INTL, tier: 2}
   - {id: me_mee,      name: Middle East Eye, type: rss, url: "https://www.middleeasteye.net/rss", lang: en, country: INTL, tier: 2}
+
+# هشتگ‌های پلتفرم‌ها (تلگرام و X): جفت «ایران + هوانوردی» در یک پست کوتاه
+# نشانه‌ی موضوع اصلی است و در طبقه‌بند امتیاز ارسال می‌گیرد. در جست‌وجوی X هم
+# از همین فهرست کوئری ساخته می‌شود (XCollector). هشتگ تازه را همین‌جا اضافه کن.
+hashtags:
+  iran: ["#Iran", "#Tehran", "#ایران", "#تهران", "#حریم_هوایی", "#IranAirspace"]
+  aviation: ["#NOTAM", "#TehranFIR", "#OIIX", "#OIIE", "#OIII", "#IKA", "#aviation", "#airspace", "#پرواز", "#فرودگاه", "#مهرآباد"]
+
+# منابع متن‌باز بدون کلید:
+# - GDELT (پروژه‌ی متن‌باز پایش اخبار جهان): کالکتورش در src/collectors.py است و
+#   با gdelt.enabled در settings.yaml روشن می‌شود؛ کلید نمی‌خواهد.
+# - RSSHub (متن‌باز): اگر جایی هاستش کردی، خروجی هر روتش را مثل یک منبع rss
+#   معمولی به فهرست بالا اضافه کن (مثلاً روت‌های توییتر/تلگرام عمومی).
 
 # کانال‌های تلگرامی — پایش لحظه‌ای (اختیاری):
 # نیاز به ENABLE_TELEGRAM_CHANNELS=true + TELEGRAM_API_ID/HASH + یک‌بار لاگین سشن (کالکتور telethon). پیام‌ها لحظه‌ای می‌رسند و برای کانال خصوصی لازم است.

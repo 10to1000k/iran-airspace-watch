@@ -286,6 +286,18 @@ class XCollector:
         out.append(
             '(OIIE OR OIII OR OIIX OR "Tehran FIR") (closed OR NOTAM OR airspace) -filter:replies'
         )
+        # کوئری هشتگی از فهرست config/sources.yaml (بخش hashtags)
+        hashtags_cfg = (self.cfg.sources or {}).get("hashtags") or {}
+        tags = [
+            str(tag)
+            for group in ("iran", "aviation")
+            for tag in (hashtags_cfg.get(group) or [])
+            if str(tag).isascii()
+        ]
+        if tags:
+            out.append(
+                f"({' OR '.join(tags[:8])}) (Iran OR Tehran OR OIIX OR NOTAM) -filter:replies"
+            )
         return out
 
     def poll(self) -> list[RawItem]:
@@ -353,6 +365,92 @@ class XCollector:
         return out
 
 
+class GdeltCollector:
+    """پروژه‌ی متن‌باز GDELT — نمایه‌ی لحظه‌ای اخبار جهان، بدون کلید API.
+
+    مکمل RSS است: به‌جای خواندن تک‌تک فیدها، مستقیم با کوئری دقیق
+    «ایران + حریم هوایی/فرودگاه/پرواز» از API رایگان GDELT می‌پرسد،
+    برای همین ذاتاً روی موضوع اصلی متمرکز است.
+    """
+
+    API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+    QUERY = (
+        '(Iran OR Tehran OR "Iranian airspace" OR "Tehran FIR" OR OIIE OR OIII OR OIIX) '
+        "(airspace OR NOTAM OR airport OR flights OR airline OR aviation)"
+    )
+    _LANG_MAP = {
+        "English": "en", "Persian": "fa", "Russian": "ru",
+        "Chinese": "zh", "Turkish": "tr", "Arabic": "ar",
+    }
+
+    def __init__(self, config):
+        self.cfg = config
+        self.enabled = bool(config.get("gdelt.enabled", False))
+        self.timespan_hours = int(config.get("gdelt.timespan_hours", 3))
+        self.max_records = int(config.get("gdelt.max_records", 25))
+
+    def poll(self) -> list[RawItem]:
+        if not self.enabled:
+            return []
+        try:
+            response = requests.get(
+                self.API_URL,
+                params={
+                    "query": self.QUERY,
+                    "mode": "ArtList",
+                    "format": "json",
+                    "maxrecords": self.max_records,
+                    "timespan": f"{self.timespan_hours}h",
+                    "sort": "DateDesc",
+                },
+                headers={"User-Agent": USER_AGENT},
+                timeout=20,
+            )
+            response.raise_for_status()
+            return self._to_items(response.json())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("GDELT خوانده نشد: %s", exc)
+            return []
+
+    def _to_items(self, payload: dict) -> list[RawItem]:
+        out: list[RawItem] = []
+        seen_urls: set[str] = set()
+        for article in (payload or {}).get("articles", []) or []:
+            url = (article.get("url") or "").strip()
+            title = util.strip_html(article.get("title", "")).strip()
+            if not url or not title or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            domain = (article.get("domain") or "gdelt").strip()
+            source_id = "gdelt_" + "".join(
+                ch if ch.isalnum() else "_" for ch in domain.lower()
+            ).strip("_")
+            published = None
+            raw_date = article.get("seendate") or ""
+            try:
+                published = datetime.strptime(raw_date, "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+            except (ValueError, TypeError):
+                pass
+            out.append(
+                RawItem(
+                    source_id=source_id or "gdelt",
+                    source_name=domain,
+                    source_url=f"https://{domain}",
+                    title=title[:200],
+                    body=title,
+                    url=url,
+                    lang=self._LANG_MAP.get(article.get("language", ""), "en"),
+                    country="INTL",
+                    kind="gdelt",
+                    published_at=published,
+                    extra={"tier": 1},
+                )
+            )
+        return out
+
+
 def _flag_direct(config, name: str) -> bool:
     raw = config.env_get(name, "false") or "false"
     return raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -389,6 +487,11 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
         )
     if x.enabled:
         jobs.append(CollectorJob("x", int(config.get("poll.x_seconds", 90)), x.poll))
+    gdelt = GdeltCollector(config)
+    if gdelt.enabled:
+        jobs.append(
+            CollectorJob("gdelt", int(config.get("gdelt.seconds", 300)), gdelt.poll)
+        )
     return jobs
 
 
