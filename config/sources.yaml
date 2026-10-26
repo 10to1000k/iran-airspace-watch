@@ -58,7 +58,8 @@ sources:
   - {id: av_aerotime, name: AeroTime,        type: rss, url: "https://www.aerotime.aero/feed", lang: en, country: INTL, tier: 1}
   - {id: av_opsgroup, name: OPSGROUP,        type: rss, url: "https://ops.group/blog/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_flightglobal,name: FlightGlobal, type: rss, url: "https://www.flightglobal.com/rss", lang: en, country: INTL, tier: 1}
-  - {id: av_jacdec,   name: JACDEC,          type: rss, url: "https://www.jacdec.de/feed/", lang: en, country: INTL, tier: 1}
+  # JACDEC از کلاستر OpenShift قابل دسترسی نیست (Network is unreachable — در لاگ زنده‌ی ۱۴۰۵/۰۸/۰۴ دیده شد)
+  - {id: av_jacdec,   name: JACDEC,          type: rss, url: "https://www.jacdec.de/feed/", lang: en, country: INTL, tier: 1, enabled: false}
   - {id: av_airlinegeeks,name: AirlineGeeks, type: rss, url: "https://airlinegeeks.com/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_aviation24,name: Aviation24.be,  type: rss, url: "https://www.aviation24.be/feed/", lang: en, country: INTL, tier: 1}
   # Aviation Herald RSS ندارد (بررسی شد)
