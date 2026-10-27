@@ -101,6 +101,9 @@ class Classifier:
         self._negative_title = (
             self.settings.get("relevance", {}).get("negative_title_keywords") or []
         )
+        self._off_topic_title = (
+            self.settings.get("relevance", {}).get("off_topic_title_keywords") or []
+        )
         # هشتگ‌های پلتفرم‌ها (تلگرام/X) از config/sources.yaml
         hashtags_cfg = (config.sources or {}).get("hashtags") or {}
         self._hashtags_iran = [
@@ -388,7 +391,15 @@ class Classifier:
         airports_title = self._airports_in(title_raw)
         airlines_title = self.airlines.match(title_raw)
         iran_title = self._hit(title_text, self._relevance)
-        strong_title = self._distinct_hits(title_text, self._strong)
+        # واژه‌های نظامیِ صرف (air force / airbase) به‌تنهایی تیتر را «موضوع
+        # اصلی هوانوردی غیرنظامی/حریم هوایی» نمی‌کنند؛ همین حالا در فهرست
+        # غیرعملیاتی‌اند و نباید از مسیر strong عبور کنند.
+        _nonop_norm = {util.normalize(kw) for kw in self._non_operational}
+        strong_title = [
+            hit
+            for hit in self._distinct_hits(title_text, self._strong)
+            if hit not in _nonop_norm
+        ]
         weak_title = self._distinct_hits(title_text, self._aviation)
         strong_body = self._distinct_hits(body_text, self._strong)
         signal_body = self._distinct_hits(body_text, self._airspace_signal)
@@ -419,6 +430,19 @@ class Classifier:
         # وتوی موضوعات پرت: ورزش/سرگرمی در تیتر، مگر موجودیت هوانوردی در تیتر باشد
         if publishable and self._hit(title_text, self._negative_title):
             if not (airports_title or airlines_title or strong_title):
+                publishable = False
+
+        # وتوی سختِ تیترهای کیفری/دادگاهی/جاسوسی: خبر «متهم‌شدن به کمک
+        # اطلاعاتی به ایران در یک پایگاه نظامی خارجی» خبر حریم هوایی نیست،
+        # حتی اگر بدنه پر از aircraft/flights باشد. ثبت می‌شود ولی پوش
+        # نمی‌شود؛ مگر اینکه خود تیتر سیگنال عملیاتی واقعی داشته باشد.
+        if publishable and self._hit(title_text, self._off_topic_title):
+            operational_title = (
+                bool(self._distinct_hits(title_text, self._airspace_signal))
+                or bool(airports_title)
+                or any(self.airlines.is_iranian(name) for name in airlines_title)
+            )
+            if not operational_title:
                 publishable = False
         return publishable
 

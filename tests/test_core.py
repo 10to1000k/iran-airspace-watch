@@ -388,6 +388,43 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.publishable)
 
+    def test_espionage_court_story_is_not_publishable(self):
+        """شکایت کاربر: خبر متهم‌شدن دو نفر در بریتانیا به کمک اطلاعاتی به
+        ایران (پایگاه RAF) پوش شد، درحالی‌که خبر حریم هوایی/پرواز نیست."""
+        result = self.classifier.classify(
+            self.item(
+                "2 men charged in UK with helping Iran over air force base incident",
+                "Two men were charged under the National Security Act over the "
+                "security incident at RAF Fairford. The aircraft were relocated "
+                "and flights at the base continued, officials said.",
+                country="CN",
+            )
+        )
+        self.assertFalse(result.publishable)  # برای کاربر نمی‌رود
+
+    def test_court_word_with_operational_title_stays_publishable(self):
+        """«دادگاه» در تیتر نباید خبر عملیاتی واقعی را بکشد: وقتی خود تیتر
+        از بستن حریم هوایی می‌گوید، خبر موضوع اصلی است."""
+        result = self.classifier.classify(
+            self.item(
+                "Iran closes airspace and cancels flights after court ruling",
+                "A NOTAM was issued for the Tehran FIR (OIIX).",
+            )
+        )
+        self.assertTrue(result.publishable)
+
+    def test_persian_espionage_story_is_not_publishable(self):
+        result = self.classifier.classify(
+            self.item(
+                "دو مرد در بریتانیا به اتهام جاسوسی برای ایران بازداشت شدند",
+                "این دو نفر در نزدیکی یک پایگاه هوایی دستگیر شدند و هواپیماهای "
+                "آمریکایی از آن پایگاه جابه‌جا شدند.",
+                lang="fa",
+                country="CN",
+            )
+        )
+        self.assertFalse(result.publishable)
+
     def test_hashtag_pair_is_on_topic(self):
         result = self.classifier.classify(
             self.item("فوری #ایران #NOTAM حریم هوایی بسته شد", "")
