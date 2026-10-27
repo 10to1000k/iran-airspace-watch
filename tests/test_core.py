@@ -214,6 +214,48 @@ class ClassifierTests(unittest.TestCase):
             )
         )
         self.assertTrue(result.relevant)
+        self.assertIn("IR", result.countries)
+
+    def test_iranian_airline_retirees_story_is_irrelevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran Air retirees protest outside Tehran headquarters over pensions",
+                "Former Iran Air employees say their pensions have not been paid for months. "
+                "The retirees gathered outside the company headquarters.",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_iran_air_force_budget_story_is_irrelevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "Iran parliamentary commission reviews plan to expand Air Force capabilities",
+                "The committee discussed the air force budget and military procurement.",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_foreign_airport_attack_with_iran_mention_is_irrelevant(self):
+        result = self.classifier.classify(
+            self.item(
+                "Drone attack on Riyadh airport: Iran-backed Houthis claim responsibility",
+                "Flights were briefly suspended at King Khalid International Airport. "
+                "Saudi officials blamed Iran for supporting the attack.",
+            )
+        )
+        self.assertFalse(result.relevant)
+
+    def test_regional_airspace_story_does_not_force_ir_country(self):
+        result = self.classifier.classify(
+            self.item(
+                "Emirates suspends flights across Middle East airspace",
+                "The airline cancelled flights after airspace closures in the region.",
+            )
+        )
+        self.assertTrue(result.relevant)
+        self.assertNotIn("IR", result.countries)
 
     def test_foreign_airline_route_without_iran_stays_irrelevant(self):
         result = self.classifier.classify(

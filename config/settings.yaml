@@ -252,6 +252,75 @@ relevance:
     - 战争
     - 导弹
 
+  # فرودگاه‌های خارجی که صرفاً با یک اشاره‌ی سیاسی/جنگی به ایران نباید
+  # خبر ایران‌محور تلقی شوند (مگر آنکه سیگنال عملیاتی حریم هوایی داشته باشند).
+  foreign_airport_keywords:
+    - riyadh
+    - "king khalid"
+    - dubai
+    - doha
+    - "abu dhabi"
+    - istanbul
+    - baghdad
+    - baku
+    - tbilisi
+    - muscat
+    - kuwait
+    - cairo
+    - amman
+    - beirut
+    - damascus
+    - karachi
+    - lahore
+    - bangkok
+    - "western sydney"
+    - ریاض
+    - دبی
+    - دوحه
+    - استانبول
+    - بغداد
+    - باکو
+    - مسقط
+    - قاهره
+
+  # واژه‌های غیرعملیاتی: خروجی‌های خبری درباره‌ی پرسنل، بازنشستگی، بودجه،
+  # خرید نظامی و جنگ‌افزار نباید با «ایران + هوانوردی» قاطی شوند.
+  non_operational_keywords:
+    - retire
+    - retired
+    - retirement
+    - pension
+    - veteran
+    - employees
+    - personnel
+    - payroll
+    - budget
+    - procurement
+    - "air force"
+    - airbase
+    - "air base"
+    - military
+    - defence
+    - defense
+    - missile
+    - drone
+    - fighter
+    - warplane
+    - بازنشست
+    - مستمری
+    - حقوق بازنشست
+    - کارکنان
+    - پرسنل
+    - بودجه
+    - خرید نظامی
+    - نیروی هوایی
+    - جنگنده
+    - پهپاد
+    - نظامی
+    - askeri
+    - "hava kuvvetleri"
+    - "военно-воздушные"
+
 # ── دسته‌بندی ────────────────────────────────────────────────
 categories:
   airspace:

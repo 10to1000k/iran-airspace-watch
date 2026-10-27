@@ -71,6 +71,12 @@ class Classifier:
         self._conflict = (
             self.settings.get("relevance", {}).get("conflict_keywords") or []
         )
+        self._foreign_airports = (
+            self.settings.get("relevance", {}).get("foreign_airport_keywords") or []
+        )
+        self._non_operational = (
+            self.settings.get("relevance", {}).get("non_operational_keywords") or []
+        )
         self._airport_codes = (
             self.settings.get("relevance", {}).get("airport_codes") or []
         )
@@ -120,11 +126,17 @@ class Classifier:
         returned: True اگر الخبر مربوط است، False در غیر این صورت.
         """
         norm = util.normalize(text)
+        non_operational = self._hit(norm, self._non_operational)
+        foreign_airport = self._hit(norm, self._foreign_airports)
+        airspace_signal = self._hit(norm, self._airspace_signal)
+        operational = airspace_signal or (
+            self._hit(norm, self._strong) and not non_operational
+        )
 
-        # ── ۱. کد فرودگاه (OIIE, IKA و غیره) ──
+        # ── ۱. کد فرودگاه ایرانی (OIIE, IKA و غیره) ──
         if airports:
             # کد فرودگاه به‌تنهایی کافی نیست؛ باید یک نشانه‌ی عملیاتی هم باشد.
-            if self._hit(norm, self._strong) or self._hit(norm, self._airspace_signal):
+            if operational:
                 return True
             weak_hits = sum(1 for kw in self._aviation if _contains(norm, kw))
             return weak_hits >= 2
@@ -132,21 +144,16 @@ class Classifier:
         # ── ۲. ایرلاین ایرانی ──
         iranian_airlines = [a for a in airlines if self.airlines.is_iranian(a)]
         if iranian_airlines:
-            # ایرلاین ایرانی خودش نشانه‌ی ایران است، اما هنوز نیاز به aviation signal است
-            if self._hit(norm, self._airspace_signal):
-                return True
-            # الخبر فقط نام ایرلاین دارد (مثلاً «ماهان ایر در گوانگژو»)
-            # این relevant است چون نام ایرلاین جزئی از موضوع է
-            return True
+            # نام ایرلاین به‌تنهایی کافی نیست: خبر بازنشستگی/پرسنل/بودجه هم
+            # نام «ایران ایر» را دارد. باید نشانه‌ی عملیاتی واقعی باشد.
+            if non_operational and not airspace_signal:
+                return False
+            return operational
 
         # ── ۳. ایرلاین خارجی + منطقه + سیگنال حریم هوایی ──
         # این قاعده پیش از الزام «واژه‌ی ایران» می‌آید، چون تعطیلی حریم هوایی
         # خاورمیانه حتی بدون نام ایران هم برای مخاطب ایرانی مهم است.
-        if (
-            airlines
-            and self._hit(norm, self._region)
-            and self._hit(norm, self._airspace_signal)
-        ):
+        if airlines and self._hit(norm, self._region) and airspace_signal:
             return True
 
         # ── ۴. متاضد Kandidaten کلمات relacionadas با ایران ──
@@ -159,16 +166,21 @@ class Classifier:
             if not self._hit(norm, self._strong):
                 return False
 
-        # ── ۵.航空 سیگنال izquierdo ──
-        if self._hit(norm, self._airspace_signal):
+        # ── ۵. سیگنال عملیاتی حریم هوایی ──
+        if airspace_signal:
             return True
 
         # ── ۶. conflicto (اگر فعال شده باشد) ──
         if self._include_conflict and self._hit(norm, self._conflict):
             return True
 
-        # ── ۷. کلمات starke aviation ──
-        if self._hit(norm, self._strong):
+        # فرودگاه خارجی + اشاره‌ی سیاسی/نظامی به ایران، بدون عملیات هوایی،
+        # خبر ایران‌محور نیست (مثلاً حمله به فرودگاه ریاض و متهم کردن ایران).
+        if foreign_airport:
+            return False
+
+        # ── ۷. کلمات starke aviation (به‌جز واژه‌های غیرعملیاتی) ──
+        if operational:
             return True
 
         # ── ۸. کلمات ضعیف هوانوردی (باید حداقل دو مورد باشد) ──
@@ -206,8 +218,16 @@ class Classifier:
         else:
             severity = self._base_severity.get(category, "context")
 
-        # ایران همیشه در کشورها هست
-        countries = {"IR"}
+        # کشورها را از سیگنال‌های واقعی ایران بساز؛ «IR» را به همه‌ی رخدادها نچسبان.
+        countries: set[str] = set()
+        iran_signal = (
+            bool(airports)
+            or any(self.airlines.is_iranian(a) for a in airlines)
+            or item.country == "IR"
+            or self._hit(text, self._relevance)
+        )
+        if iran_signal:
+            countries.add("IR")
         if item.country and item.country not in ("INTL", ""):
             countries.add(item.country)
         country_map = {
