@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS events (
     sources_count   INTEGER NOT NULL DEFAULT 1,
     corrected       INTEGER NOT NULL DEFAULT 0,
     first_seen      TEXT NOT NULL,
-    last_updated    TEXT NOT NULL
+    last_updated    TEXT NOT NULL,
+    extra           TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_recent ON events(first_seen);
@@ -66,6 +67,24 @@ CREATE TABLE IF NOT EXISTS feedback (
     event_id   INTEGER NOT NULL,
     verdict    TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    INTEGER NOT NULL,
+    chat_id     TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    last_active TEXT NOT NULL,
+    UNIQUE(event_id, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL,
+    role        TEXT NOT NULL,   -- user | assistant
+    content     TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
 );
 
 CREATE TABLE IF NOT EXISTS kv (
@@ -99,6 +118,8 @@ class Database:
                 self.conn.execute(
                     "ALTER TABLE events ADD COLUMN publishable INTEGER NOT NULL DEFAULT 1"
                 )
+            if "extra" not in cols:
+                self.conn.execute("ALTER TABLE events ADD COLUMN extra TEXT")
             self.conn.commit()
 
     def close(self) -> None:
@@ -108,7 +129,9 @@ class Database:
     # ── kv ───────────────────────────────────────────────────
     def kv_get(self, key: str, default: str | None = None) -> str | None:
         with self._lock:
-            row = self.conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+            row = self.conn.execute(
+                "SELECT value FROM kv WHERE key=?", (key,)
+            ).fetchone()
         return row["value"] if row else default
 
     def kv_set(self, key: str, value: str) -> None:
@@ -144,10 +167,19 @@ class Database:
                         title, body, fingerprint, published_at, collected_at, event_id)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        item.source_id, item.source_name, item.source_url, item.url,
-                        item.lang, item.country, item.kind, item.title, item.body,
-                        fp, util.iso(item.published_at) if item.published_at else None,
-                        util.iso(util.now_utc()), event_id,
+                        item.source_id,
+                        item.source_name,
+                        item.source_url,
+                        item.url,
+                        item.lang,
+                        item.country,
+                        item.kind,
+                        item.title,
+                        item.body,
+                        fp,
+                        util.iso(item.published_at) if item.published_at else None,
+                        util.iso(util.now_utc()),
+                        event_id,
                     ),
                 )
                 self.conn.commit()
@@ -226,6 +258,7 @@ class Database:
             "primary_url": data.get("primary_url", ""),
             "primary_source": data.get("primary_source", ""),
             "publishable": int(data.get("publishable", 1)),
+            "extra": data.get("extra"),
             "first_seen": now,
             "last_updated": now,
         }
@@ -313,7 +346,9 @@ class Database:
             refs.setdefault(str(legacy["chat_id"]), int(legacy["root_message_id"]))
         return refs
 
-    def find_event_by_message(self, chat_id: str, message_id: int) -> sqlite3.Row | None:
+    def find_event_by_message(
+        self, chat_id: str, message_id: int
+    ) -> sqlite3.Row | None:
         with self._lock:
             row = self.conn.execute(
                 """SELECT e.* FROM events e
@@ -357,6 +392,61 @@ class Database:
                    GROUP BY e.primary_source
                    ORDER BY down DESC, up DESC"""
             ).fetchall()
+
+    # ── جلسات چت با LLM ──────────────────────────────────────
+    def get_or_create_chat_session(self, event_id: int, chat_id: str) -> int:
+        """یک جلسه چت برای الخبر+چت برمی‌گرداند، اگر وجود نداشته باشد می‌سازد."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id FROM chat_sessions WHERE event_id=? AND chat_id=?",
+                (event_id, str(chat_id)),
+            ).fetchone()
+            if row:
+                session_id = int(row["id"])
+                self.conn.execute(
+                    "UPDATE chat_sessions SET last_active=? WHERE id=?",
+                    (util.iso(util.now_utc()), session_id),
+                )
+                self.conn.commit()
+                return session_id
+
+            now = util.iso(util.now_utc())
+            cur = self.conn.execute(
+                "INSERT INTO chat_sessions(event_id, chat_id, created_at, last_active) "
+                "VALUES (?,?,?,?)",
+                (event_id, str(chat_id), now, now),
+            )
+            self.conn.commit()
+            return int(cur.lastrowid)
+
+    def add_chat_message(self, session_id: int, role: str, content: str) -> None:
+        """یک پیام به تاریخچه‌ی چت اضافه می‌کند."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO chat_messages(session_id, role, content, created_at) "
+                "VALUES (?,?,?,?)",
+                (session_id, role, util.iso(util.now_utc()), content),
+            )
+            self.conn.commit()
+
+    def get_chat_history(self, session_id: int, limit: int = 20) -> list[dict]:
+        """آخرین پیام‌های چت را برمی‌گرداند."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT role, content FROM chat_messages "
+                "WHERE session_id=? ORDER BY id DESC LIMIT ?",
+                (session_id, int(limit)),
+            ).fetchall()
+        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+    def find_event_by_chat(self, chat_id: str, message_id: int) -> dict | None:
+        """رویداد مرتبط با یک پیام تلگرام را پیدا می‌کند."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT e.* FROM events e WHERE e.chat_id=? AND e.root_message_id=?",
+                (str(chat_id), int(message_id)),
+            ).fetchone()
+        return dict(row) if row else None
 
     # ── سلامت منابع ──────────────────────────────────────────
     def mark_source_ok(self, source_id: str) -> None:

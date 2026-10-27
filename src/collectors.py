@@ -1,4 +1,4 @@
-"""کالکتورها: RSS، کانال‌های تلگرام، و توییتر.
+"""کالکتورها: RSS، کانال‌های تلگرام، توییتر و اینستاگرام.
 
 همه یک قرارداد دارند: poll() -> list[RawItem]
 """
@@ -9,7 +9,9 @@ import asyncio
 import calendar
 import logging
 import queue
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -41,6 +43,7 @@ class RssCollector:
         self.db = db
         self.max_age_hours = float(config.get("poll.max_item_age_hours", 12))
         self.per_feed = int(config.get("poll.max_items_per_feed", 15))
+        self.max_body_chars = int(config.get("poll.max_feed_body_chars", 1200))
         self.max_workers = max(1, int(config.get("poll.rss_workers", 6)))
         self.skip_url_parts = [
             part.lower() for part in (config.get("poll.skip_url_parts", []) or [])
@@ -118,7 +121,7 @@ class RssCollector:
             if published and published < cutoff:
                 continue
             title = util.strip_html(entry.get("title", "")).strip()
-            body = _entry_body(entry)
+            body = _entry_body(entry, self.max_body_chars)
             raw_link = (entry.get("link") or "").strip()
             if raw_link and self._should_skip(raw_link, source["url"]):
                 continue
@@ -151,14 +154,19 @@ def _entry_time(entry) -> datetime | None:
     return None
 
 
-def _entry_body(entry) -> str:
+def _entry_body(entry, limit: int = 1200) -> str:
+    """خلاصه‌ی فید تا سقف limit کاراکتر (سقف قابل تنظیم: poll.max_feed_body_chars).
+
+    اگر فید متن کامل داشته باشد همان می‌آید؛ اگر بریده شود «…» می‌ماند و
+    پایپ‌لاین متن کامل را از لینک خبر می‌گیرد (poll.fetch_full_article).
+    """
     if entry.get("content"):
         raw = entry["content"][0].get("value", "")
     else:
         raw = entry.get("summary", "") or entry.get("description", "")
     text = util.strip_html(raw)
     text = " ".join(text.split())
-    return util.truncate(text, 1200)
+    return util.truncate(text, limit)
 
 
 class TelegramChannelCollector:
@@ -171,6 +179,8 @@ class TelegramChannelCollector:
         self.cfg = config
         self.queue: queue.Queue[RawItem] = queue.Queue()
         self._thread: threading.Thread | None = None
+        self.max_body_chars = int(config.get("poll.max_telegram_body_chars", 1200))
+        self.watched = load_watchlist(config)
         self.enabled = _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS") and bool(
             config.telegram_channels
         )
@@ -224,7 +234,7 @@ class TelegramChannelCollector:
                 else f"https://t.me/c/{event.chat_id}/{message.id}"
             )
             title = text.split("\n", 1)[0][:200]
-            body = util.truncate(text, 1200)
+            body = util.truncate(text, self.max_body_chars)
             self.queue.put(
                 RawItem(
                     source_id=f"tg_{username or event.chat_id}",
@@ -239,7 +249,11 @@ class TelegramChannelCollector:
                     published_at=message.date.astimezone(timezone.utc)
                     if message.date
                     else util.now_utc(),
-                    extra={"tier": 1},
+                    extra={
+                        "tier": 1,
+                        "hashtags": extract_hashtags(text),
+                        "watched_hashtags": watched_hashtags(text, self.watched),
+                    },
                 )
             )
 
@@ -267,6 +281,8 @@ class XCollector:
         self.cfg = config
         self.airlines = airline_index
         self.enabled = _flag_direct(config, "ENABLE_X")
+        self.max_body_chars = int(config.get("poll.max_x_body_chars", 1000))
+        self.watched = load_watchlist(config)
         self.accounts = [
             a for a in (config.env_get("X_ACCOUNTS", "") or "").split(",") if a
         ]
@@ -286,18 +302,24 @@ class XCollector:
         out.append(
             '(OIIE OR OIII OR OIIX OR "Tehran FIR") (closed OR NOTAM OR airspace) -filter:replies'
         )
-        # کوئری هشتگی از فهرست config/sources.yaml (بخش hashtags)
-        hashtags_cfg = (self.cfg.sources or {}).get("hashtags") or {}
-        tags = [
-            str(tag)
-            for group in ("iran", "aviation")
-            for tag in (hashtags_cfg.get(group) or [])
-            if str(tag).isascii()
-        ]
-        if tags:
-            out.append(
-                f"({' OR '.join(tags[:8])}) (Iran OR Tehran OR OIIX OR NOTAM) -filter:replies"
-            )
+        # کوئری هشتگی: همه‌ی هشتگ‌های تحت پایش در یک جست‌وجو
+        if self.watched:
+            clauses = " OR ".join(f"#{tag}" for tag in self.watched)
+            out.append(f"({clauses}) -filter:replies")
+        # کوئری هشتگی از فهرست config/sources.yaml (بخش hashtags) —
+        # فقط وقتی فهرست پایش تنظیمات خالی است تا کوئری هشتگی تکراری ساخته نشود
+        if not self.watched:
+            hashtags_cfg = (self.cfg.sources or {}).get("hashtags") or {}
+            tags = [
+                str(tag)
+                for group in ("iran", "aviation")
+                for tag in (hashtags_cfg.get(group) or [])
+                if str(tag).isascii()
+            ]
+            if tags:
+                out.append(
+                    f"({' OR '.join(tags[:8])}) (Iran OR Tehran OR OIIX OR NOTAM) -filter:replies"
+                )
         return out
 
     def poll(self) -> list[RawItem]:
@@ -343,13 +365,14 @@ class XCollector:
                     continue
                 if tweet.retweetedTweet:
                     continue
+                tweet_text = tweet.rawContent or ""
                 out.append(
                     RawItem(
                         source_id=f"x_{tweet.user.username}",
                         source_name=f"@{tweet.user.username}",
                         source_url=f"https://x.com/{tweet.user.username}",
-                        title=(tweet.rawContent or "").split("\n", 1)[0][:200],
-                        body=util.truncate(tweet.rawContent or "", 1000),
+                        title=tweet_text.split("\n", 1)[0][:200],
+                        body=util.truncate(tweet_text, self.max_body_chars),
                         url=f"https://x.com/{tweet.user.username}/status/{tweet.id}",
                         lang="en",
                         country="INTL",
@@ -359,6 +382,10 @@ class XCollector:
                             "tier": 1,
                             "likes": tweet.likeCount,
                             "reposts": tweet.retweetCount,
+                            "hashtags": extract_hashtags(tweet_text),
+                            "watched_hashtags": watched_hashtags(
+                                tweet_text, self.watched
+                            ),
                         },
                     )
                 )
@@ -456,6 +483,134 @@ def _flag_direct(config, name: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def extract_hashtags(text: str) -> list[str]:
+    """هشتگ‌های #abc را از متن استخراج می‌کند."""
+    if not text:
+        return []
+    return re.findall(r"#[\w\u0600-\u06FF]+", text)
+
+
+def load_watchlist(config) -> list[str]:
+    """هشتگ‌های تحت پایش از تنظیمات (hashtags.watchlist)؛ خاموشی سراسری محترم است."""
+    if not config.get("hashtags.enabled", False):
+        return []
+    out: list[str] = []
+    for entry in config.get("hashtags.watchlist", []) or []:
+        tag = entry.get("tag") if isinstance(entry, dict) else entry
+        tag = str(tag or "").strip().lstrip("#")
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
+def watched_hashtags(text: str, watchlist: list[str]) -> list[str]:
+    """کدام هشتگ‌های تحت پایش در متن هستند؟ (مقایسه‌ی بدون # و با نرمال‌سازی)"""
+    if not text or not watchlist:
+        return []
+    present = {util.normalize(tag.lstrip("#")) for tag in extract_hashtags(text)}
+    return [
+        tag for tag in watchlist if util.normalize(tag.lstrip("#")) in present
+    ]
+
+
+class InstagramHashtagCollector:
+    """پایش هشتگ در اینستاگرام (اختیاری، پیش‌فرض خاموش).
+
+    ⚠️ اسکرپینگ اینستاگرام خلاف شرایط سرویس آن است و می‌تواند حساب/آی‌پی را
+    مسدود کند — همان هشدار کالکتور X. فعال‌سازی: ENABLE_INSTAGRAM=true و
+    ترجیحاً INSTAGRAM_USERNAME/PASSWORD (بدون لاگین، اینستاگرام بعد از چند
+    درخواست محدود می‌کند). هشتگ‌ها از hashtags.watchlist خوانده می‌شوند.
+    """
+
+    def __init__(self, config):
+        self.cfg = config
+        self.watched = load_watchlist(config)
+        self.max_posts = int(config.get("hashtags.instagram.max_posts_per_tag", 12))
+        self.lang = str(config.get("hashtags.instagram.lang", "en"))
+        self.max_body_chars = int(config.get("poll.max_instagram_body_chars", 2200))
+        self.max_age_hours = float(config.get("poll.max_item_age_hours", 12))
+        self.enabled = _flag_direct(config, "ENABLE_INSTAGRAM") and bool(self.watched)
+
+    def poll(self) -> list[RawItem]:
+        if not self.enabled:
+            return []
+        try:
+            loader = self._make_loader()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("اینستاگرام در دسترس نیست — این چرخه رد شد: %s", exc)
+            return []
+        cutoff = util.now_utc() - timedelta(hours=self.max_age_hours)
+        out: list[RawItem] = []
+        for tag in self.watched:
+            try:
+                posts = self._tag_posts(loader, tag)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("هشتگ اینستاگرام #%s خوانده نشد: %s", tag, exc)
+                posts = []
+            for post in posts:
+                when = (
+                    post.date_utc.astimezone(timezone.utc) if post.date_utc else None
+                )
+                if when and when < cutoff:
+                    continue
+                caption = (post.caption or "").strip()
+                if not caption:
+                    continue
+                out.append(
+                    RawItem(
+                        # source_id ثابت: یک پست که از دو هشتگ بیاید فقط یک‌بار ثبت شود
+                        source_id="instagram",
+                        source_name=f"Instagram #{tag}",
+                        source_url=f"https://www.instagram.com/explore/tags/{tag}/",
+                        title=caption.split("\n", 1)[0][:200],
+                        body=util.truncate(caption, self.max_body_chars),
+                        url=f"https://www.instagram.com/p/{post.shortcode}/",
+                        lang=self.lang,
+                        country="INTL",
+                        kind="instagram",
+                        published_at=when,
+                        extra={
+                            "tier": 2,
+                            "hashtags": extract_hashtags(caption),
+                            "watched_hashtags": watched_hashtags(caption, self.watched),
+                        },
+                    )
+                )
+            time.sleep(2)  # فاصله‌ی ملایم بین تگ‌ها برای جلوگیری از محدودسازی
+        return out
+
+    def _make_loader(self):
+        import instaloader
+
+        loader = instaloader.Instaloader(
+            quiet=True,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False,
+            download_geotags=False,
+            download_pic_comments=False,
+        )
+        username = self.cfg.env_get("INSTAGRAM_USERNAME", "") or ""
+        password = self.cfg.env_get("INSTAGRAM_PASSWORD", "") or ""
+        if username and password:
+            try:
+                loader.login(username, password)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("لاگین اینستاگرام ناموفق — ناشناس ادامه می‌دهیم: %s", exc)
+        return loader
+
+    def _tag_posts(self, loader, tag: str) -> list:
+        from instaloader import Hashtag
+
+        hashtag = Hashtag.from_name(loader.context, tag)
+        posts: list = []
+        for post in hashtag.get_posts():
+            posts.append(post)
+            if len(posts) >= self.max_posts:
+                break
+        return posts
+
+
 class CollectorJob:
     def __init__(self, name: str, interval: int, fn: Callable[[], list[RawItem]]):
         self.name = name
@@ -469,6 +624,7 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     telegram = TelegramChannelCollector(config)
     telegram.start()
     x = XCollector(config, airline_index)
+    instagram = InstagramHashtagCollector(config)
 
     jobs = [CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll)]
     # فقط کالکتورهایی که واقعاً فعال‌اند زمان‌بندی می‌شوند تا نخ بیکار نسازند
@@ -491,6 +647,14 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     if gdelt.enabled:
         jobs.append(
             CollectorJob("gdelt", int(config.get("gdelt.seconds", 300)), gdelt.poll)
+        )
+    if instagram.enabled:
+        jobs.append(
+            CollectorJob(
+                "instagram",
+                int(config.get("hashtags.instagram.seconds", 900)),
+                instagram.poll,
+            )
         )
     return jobs
 

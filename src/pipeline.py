@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 
 from . import formatter, util
+from .article import fetch_article_text
 from .classify import Classifier
 from .models import RawItem
 from .translator import Translator
@@ -13,6 +15,9 @@ from .translator import Translator
 log = logging.getLogger(__name__)
 
 SEVERITY_RANK = {"context": 0, "important": 1, "critical": 2}
+
+# هر خبر با اعتماد پایین‌تر از این آستانه، رد می‌شود (مثلاً 0.30 = ۳۰٪)
+MIN_CONFIDENCE = 0.30
 
 
 class Pipeline:
@@ -27,6 +32,13 @@ class Pipeline:
         if hasattr(bot, "set_chat_responder"):
             bot.set_chat_responder(self._answer_chat_question)
 
+        self._fetch_full_article = bool(config.get("poll.fetch_full_article", True))
+        self._article_max_chars = int(config.get("poll.article_max_chars", 6000))
+        self._article_timeout = float(config.get("poll.article_timeout_seconds", 10))
+        self._article_min_summary = int(
+            config.get("poll.article_min_summary_chars", 400)
+        )
+
     def _answer_chat_question(self, event, question: str, history) -> str:
         items = self.db.items_for_event(int(event["id"]), limit=3)
         return self.translator.answer_about_event(event, items, question, history)
@@ -40,9 +52,19 @@ class Pipeline:
             return "seen"
 
         try:
+            self._enrich_full_text(item)
             classification = self.classifier.classify(item)
             if not classification.relevant:
                 return "irrelevant"
+
+            # فیلتر ربط سخت‌گیرانه است؛ امتیاز اعتماد فقط برای تشخیص و گزارش است،
+            # نه یک دروازه‌ی دوم که خبرهای معتبر را بی‌صدا حذف کند.
+            if classification.confidence_score < MIN_CONFIDENCE:
+                log.debug(
+                    "اعتماد پایین (%.2f) ولی مرتبط: %s",
+                    classification.confidence_score,
+                    item.title[:70],
+                )
 
             tokens = util.tokens(f"{item.title} {item.body}")
             existing = self._find_cluster(tokens, classification)
@@ -55,6 +77,34 @@ class Pipeline:
             # تا در چرخه‌ی بعدی دوباره پردازش شود و برای همیشه نسوزد.
             self.db.delete_item(item.source_id, fp)
             raise
+
+    # ── متن کامل مقاله ───────────────────────────────────────
+    def _enrich_full_text(self, item: RawItem) -> None:
+        """اگر خلاصه‌ی فید کوتاه یا بریده باشد («…»)، متن کامل از لینک گرفته می‌شود.
+
+        فقط برای RSS است (تلگرام/X خودشان متن کامل پیام را می‌دهند). بدنه‌ی آیتم
+        با متن کامل جایگزین می‌شود تا دسته‌بندی، خوشه‌بندی و ترجمه کل مقاله را
+        ببینند؛ اثر انگشت پیش از این مرحله محاسبه شده و تغییری نمی‌کند. هر خطا
+        بی‌صدا رد می‌شود — خبر با همان خلاصه ادامه می‌یابد.
+        """
+        if not self._fetch_full_article or item.kind != "rss":
+            return
+        body = (item.body or "").strip()
+        if (
+            len(body) >= self._article_min_summary
+            and not body.endswith("…")
+        ):
+            return  # فید خودش متن کامل (یا تقریباً کامل) را داده است
+        full = fetch_article_text(
+            item.url,
+            max_chars=self._article_max_chars,
+            timeout=(5.0, self._article_timeout),
+        )
+        if len(full) > len(body):
+            log.debug(
+                "متن کامل مقاله گرفته شد (%d کاراکتر): %s", len(full), item.url[:100]
+            )
+            item.body = full
 
     # ── خوشه‌بندی ────────────────────────────────────────────
     def _find_cluster(self, tokens: set[str], classification):
@@ -72,7 +122,10 @@ class Pipeline:
                 continue
             other = set((row["tokens"] or "").split())
             score = util.jaccard(tokens, other)
-            same_entity = bool(classification.entity_key) and row["entity_key"] == classification.entity_key
+            same_entity = (
+                bool(classification.entity_key)
+                and row["entity_key"] == classification.entity_key
+            )
             if (score >= threshold) or (same_entity and score >= boost):
                 if score > best_score:
                     best, best_score = row, score
@@ -80,32 +133,63 @@ class Pipeline:
 
     # ── رخداد تازه ───────────────────────────────────────────
     def _create_event(self, item: RawItem, fp: str, cls, tokens: set[str]) -> str:
-        translation = self.translator.translate_item(
-            title=item.title,
-            body=item.body,
-            lang=item.lang,
-            kind=item.kind,
-            decoded_fa=item.extra.get("decoded_fa", ""),
-            raw=item.extra.get("raw_notam", ""),
-        )
+        if not cls.publishable:
+            # خارج از موضوع اصلی: بدون ترجمه (و بدون هدر دادن سهمیه‌ی LLM)
+            # فقط برای /last و خوشه‌بندی ثبت می‌شود و هرگز پوش نمی‌شود.
+            from .models import Translation
 
+            translation = Translation(
+                text_fa=item.body or item.title,
+                title_fa=item.title,
+                engine="skipped-offtopic",
+            )
+            return self._store_event(item, fp, cls, tokens, translation)
+
+        # ⚠️ translate_item never returns raw English. If it raises RuntimeError
+        # (e.g. model down, all fallbacks failed), delete the item and retry later.
+        try:
+            translation = self.translator.translate_item(
+                title=item.title,
+                body=item.body,
+                lang=item.lang,
+                kind=item.kind,
+                decoded_fa=item.extra.get("decoded_fa", ""),
+                raw=item.extra.get("raw_notam", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "ترجمة ناموفق — آیتم حذف شد و pipelined retry می‌شود: %s",
+                exc,
+            )
+            # آیتم از دیتابیس حذف می‌شود تا چرخه بعدی دوباره تلاش کند.
+            self.db.delete_item(item.source_id, fp)
+            return "translation-failed"
+
+        return self._store_event(item, fp, cls, tokens, translation)
+
+    def _store_event(self, item: RawItem, fp: str, cls, tokens: set[str], translation) -> str:
         confidence = "official" if item.tier == 0 else "single"
-        event_id, created = self.db.create_event({
-            "fingerprint": fp,
-            "tokens": tokens,
-            "entity_key": cls.entity_key,
-            "category": cls.category,
-            "severity": cls.severity,
-            "countries": cls.countries,
-            "airlines": cls.airlines,
-            "title_fa": translation.title_fa or item.title,
-            "body_fa": translation.text_fa,
-            "confidence": confidence,
-            "numbers_ok": 1 if translation.numbers_ok else 0,
-            "primary_url": item.url,
-            "primary_source": item.source_name,
-            "publishable": 1 if cls.publishable else 0,
-        })
+        event_id, created = self.db.create_event(
+            {
+                "fingerprint": fp,
+                "tokens": tokens,
+                "entity_key": cls.entity_key,
+                "category": cls.category,
+                "severity": cls.severity,
+                "countries": cls.countries,
+                "airlines": cls.airlines,
+                "title_fa": translation.title_fa or item.title,
+                "body_fa": translation.text_fa,
+                "confidence": confidence,
+                "numbers_ok": 1 if translation.numbers_ok else 0,
+                "primary_url": item.url,
+                "primary_source": item.source_name,
+                "publishable": 1 if cls.publishable else 0,
+                "extra": json.dumps(item.extra, ensure_ascii=False)
+                if item.extra
+                else None,
+            }
+        )
         if not created:
             # رقیب زودتر ساخته — مثل به‌روزرسانی رفتار می‌کنیم
             row = self.db.get_event(event_id)
@@ -121,7 +205,9 @@ class Pipeline:
             log.info("ثبت بدون ارسال (خارج از موضوع اصلی): %s", item.title[:70])
             return "off-topic"
         if not self._deliver_event(event):
-            log.warning("رخداد %d ثبت شد ولی ارسال تلگرام به چرخه‌ی بعد موکول شد", event_id)
+            log.warning(
+                "رخداد %d ثبت شد ولی ارسال تلگرام به چرخه‌ی بعد موکول شد", event_id
+            )
             return "queued"
         log.info("منتشر شد [%s/%s] %s", cls.severity, cls.category, item.title[:70])
         return "published"
@@ -252,7 +338,9 @@ class Pipeline:
                     int(root_id),
                     formatter.format_event(refreshed, self.cfg),
                     chat_id=chat_id,
-                    keyboard=self.bot.feedback_keyboard(event_id, refreshed["primary_url"]),
+                    keyboard=self.bot.feedback_keyboard(
+                        event_id, refreshed["primary_url"]
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.debug("ویرایش پیام ریشه ناموفق: %s", exc)
@@ -266,7 +354,9 @@ class Pipeline:
                         silent=self._silent(refreshed["severity"]),
                     )
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc)
+                    log.warning(
+                        "ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc
+                    )
 
         log.info("به‌روزرسانی [%s] %s", event_id, item.title[:70])
         return "updated"

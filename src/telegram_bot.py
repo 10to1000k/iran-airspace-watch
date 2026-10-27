@@ -146,7 +146,9 @@ class TelegramBot:
                 if attempt < retries - 1:
                     time.sleep(1.5 * (attempt + 1))
                     continue
-                raise TelegramError(f"خطای شبکه در تماس با تلگرام ({method}): {exc}") from exc
+                raise TelegramError(
+                    f"خطای شبکه در تماس با تلگرام ({method}): {exc}"
+                ) from exc
 
             try:
                 data = response.json()
@@ -165,14 +167,20 @@ class TelegramBot:
 
             code = int(data.get("error_code") or response.status_code or 0)
             description = data.get("description", "خطای نامشخص")
-            retry_after = float((data.get("parameters") or {}).get("retry_after", 0) or 0)
+            retry_after = float(
+                (data.get("parameters") or {}).get("retry_after", 0) or 0
+            )
 
             # ادیت تکراری خطا نیست
             if "message is not modified" in description.lower():
                 return None
 
             # خطای قالب HTML: بدون parse_mode دوباره بفرست تا خبر حیاتی نسوزد
-            if code == 400 and "can't parse entities" in description.lower() and "parse_mode" in payload:
+            if (
+                code == 400
+                and "can't parse entities" in description.lower()
+                and "parse_mode" in payload
+            ):
                 plain_payload = {k: v for k, v in payload.items() if k != "parse_mode"}
                 plain_payload["text"] = util.strip_html(str(payload.get("text", "")))
                 payload = plain_payload
@@ -206,7 +214,9 @@ class TelegramBot:
             _print_dry(text, target)
             return None
         if not target:
-            log.warning("گیرنده‌ای ثبت نشده — یک بار در بات /start بزنید یا TELEGRAM_CHAT_ID را در .env بگذارید")
+            log.warning(
+                "گیرنده‌ای ثبت نشده — یک بار در بات /start بزنید یا TELEGRAM_CHAT_ID را در .env بگذارید"
+            )
             return None
 
         chunks = _split_message(text)
@@ -233,7 +243,13 @@ class TelegramBot:
                 time.sleep(0.4)
         return last_id
 
-    def edit(self, message_id: int, text: str, chat_id: str | None = None, keyboard: list | None = None) -> None:
+    def edit(
+        self,
+        message_id: int,
+        text: str,
+        chat_id: str | None = None,
+        keyboard: list | None = None,
+    ) -> None:
         target = self.chat_id(chat_id)
         if self.dry_run or not self.token:
             print(f"[DRY] ویرایش پیام {message_id}: {text[:80]}…")
@@ -251,13 +267,19 @@ class TelegramBot:
             payload["reply_markup"] = {"inline_keyboard": keyboard}
         self._call("editMessageText", payload)
 
-    def answer_callback(self, callback_id: str, text: str, show_alert: bool = False) -> None:
+    def answer_callback(
+        self, callback_id: str, text: str, show_alert: bool = False
+    ) -> None:
         if self.dry_run or not self.token:
             return
         try:
             self._call(
                 "answerCallbackQuery",
-                {"callback_query_id": callback_id, "text": text, "show_alert": show_alert},
+                {
+                    "callback_query_id": callback_id,
+                    "text": text,
+                    "show_alert": show_alert,
+                },
             )
         except TelegramError as exc:
             log.debug("answerCallbackQuery: %s", exc)
@@ -359,7 +381,11 @@ class TelegramBot:
             try:
                 updates = self._call(
                     "getUpdates",
-                    {"offset": offset, "timeout": 25, "allowed_updates": ["message", "callback_query"]},
+                    {
+                        "offset": offset,
+                        "timeout": 25,
+                        "allowed_updates": ["message", "callback_query"],
+                    },
                     timeout=40,
                     retries=1,
                 )
@@ -393,7 +419,11 @@ class TelegramBot:
                         )
                     self._stop.wait(wait)
                 elif exc.status_code in (401, 404):
-                    log.error("توکن تلگرام نامعتبر یا باطل شده است (%s): %s", exc.status_code, exc)
+                    log.error(
+                        "توکن تلگرام نامعتبر یا باطل شده است (%s): %s",
+                        exc.status_code,
+                        exc,
+                    )
                     self._stop.wait(30)
                 else:
                     log.warning("getUpdates ناموفق: %s", exc)
@@ -497,7 +527,9 @@ class TelegramBot:
                     dt = datetime.fromtimestamp(rss_ts, tz=timezone.utc)
                     lines.append(f"🔄 آخرین پایش RSS: {util.format_moment(dt)}")
             if src_health["failing"]:
-                bad = "، ".join(f"{sid}({cnt})" for sid, cnt in src_health["failing"][:5])
+                bad = "، ".join(
+                    f"{sid}({cnt})" for sid, cnt in src_health["failing"][:5]
+                )
                 lines.append(f"⚠️ فیدهای دارای خطا: {html.escape(bad)}")
             self.send("\n".join(lines), chat_id=chat_id)
             return
@@ -514,7 +546,9 @@ class TelegramBot:
                 when = util.short_time(ev["first_seen"])
                 url = ev["primary_url"] or ""
                 if url.startswith("http"):
-                    lines.append(f'{icon} [{when}] <a href="{html.escape(url)}">{title}</a>')
+                    lines.append(
+                        f'{icon} [{when}] <a href="{html.escape(url)}">{title}</a>'
+                    )
                 else:
                     lines.append(f"{icon} [{when}] {title}")
             self.send("\n".join(lines), chat_id=chat_id)
@@ -523,7 +557,10 @@ class TelegramBot:
         if command == "/wrong":
             replied = message.get("reply_to_message")
             if not replied:
-                self.send("روی همان پیام خبری که اشتباه است ریپلای کن و /wrong بزن.", chat_id=chat_id)
+                self.send(
+                    "روی همان پیام خبری که اشتباه است ریپلای کن و /wrong بزن.",
+                    chat_id=chat_id,
+                )
                 return
             event = self.db.find_event_by_message(chat_id, int(replied["message_id"]))
             if not event:
@@ -536,7 +573,37 @@ class TelegramBot:
                 formatter.format_event(updated, self.cfg),
                 chat_id=chat_id,
             )
-            self.send("❌ خبر اصلاح شد و منبعش برای بازبینی علامت خورد.", chat_id=chat_id)
+            self.send(
+                "❌ خبر اصلاح شد و منبعش برای بازبینی علامت خورد.", chat_id=chat_id
+            )
+            return
+
+        if command == "/stop_chat":  # نام قدیمیِ /endchat
+            self._deactivate_chat(chat_id)
+            self.send("✅ جلسه‌ی گفت‌وگو پایان یافت.", chat_id=chat_id)
+            return
+
+        if command == "/chat":
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2:
+                self.send("استفاده: /chat <شماره‌ی خبر>\nمثال: /chat 42", chat_id=chat_id)
+                return
+            try:
+                event_id = int(parts[1])
+            except ValueError:
+                self.send("شماره‌ی خبر معتبر نیست.", chat_id=chat_id)
+                return
+            event = self.db.get_event(event_id)
+            if not event:
+                self.send("خبر پیدا نشد.", chat_id=chat_id)
+                return
+            self._activate_chat(chat_id, event_id)  # همان موتور گفت‌وگوی دکمه‌ی خبر
+            title = event["title_fa"] or "بدون تیتر"
+            self.send(
+                f"💬 شروع گفت‌وگو درباره‌ی: {title}\n"
+                f"سؤالت را بفرست؛ برای پایان /endchat بزن.",
+                chat_id=chat_id,
+            )
             return
 
     def _handle_callback(self, callback: dict) -> None:
@@ -544,12 +611,17 @@ class TelegramBot:
         callback_id = callback.get("id", "")
         parts = data.split(":")
 
-        if len(parts) == 2 and parts[0] == "ask":
+        # دکمه‌ی گفت‌وگو: ask:<id> (فعلی) و chat:open:<id> (پیام‌های قدیمی‌تر)
+        is_ask = len(parts) == 2 and parts[0] == "ask"
+        is_legacy_chat = (
+            len(parts) == 3 and parts[0] == "chat" and parts[1] == "open"
+        )
+        if is_ask or is_legacy_chat:
             chat = (callback.get("message") or {}).get("chat") or {}
             sender = callback.get("from") or {}
             chat_id = str(chat.get("id") or sender.get("id") or "")
             try:
-                event_id = int(parts[1])
+                event_id = int(parts[-1])
             except ValueError:
                 event_id = 0
             event = self.db.get_event(event_id) if event_id else None
@@ -571,15 +643,23 @@ class TelegramBot:
         if len(parts) != 3 or parts[0] != "fb":
             self.answer_callback(callback_id, "نامشخص")
             return
-        verdict, event_id = parts[1], parts[2]
-        if verdict not in {"up", "down"}:
-            self.answer_callback(callback_id, "نامشخص")
+
+        if parts[0] == "fb":
+            if len(parts) != 3:
+                self.answer_callback(callback_id, "نامشخص")
+                return
+            verdict, event_id = parts[1], parts[2]
+            if verdict not in {"up", "down"}:
+                self.answer_callback(callback_id, "نامشخص")
+                return
+            self.db.add_feedback(int(event_id), verdict)
+            self.answer_callback(
+                callback_id,
+                "ثبت شد ✅" if verdict == "up" else "ثبت شد — این منبع بازبینی می‌شود",
+            )
             return
-        self.db.add_feedback(int(event_id), verdict)
-        self.answer_callback(
-            callback_id,
-            "ثبت شد ✅" if verdict == "up" else "ثبت شد — این منبع بازبینی می‌شود",
-        )
+
+        self.answer_callback(callback_id, "نامشخص")
 
     def stop(self) -> None:
         self._stop.set()

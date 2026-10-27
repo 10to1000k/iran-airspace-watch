@@ -78,6 +78,20 @@ def hashtags(event, limit: int = 5) -> str:
             tags.append(_tag(label))
     for name in _split(_get(event, "airlines"))[:2]:
         tags.append(_tag(name))
+
+    # هشتگ‌های از محتوای منبع (توییت/تلگرام)
+    extra = _get(event, "extra", {})
+    if isinstance(extra, str):
+        import json
+
+        try:
+            extra = json.loads(extra)
+        except (ValueError, TypeError):
+            extra = {}
+    if isinstance(extra, dict):
+        for tag in extra.get("hashtags", [])[:3]:
+            tags.append(tag)
+
     seen, unique = set(), []
     for tag in tags:
         if tag not in seen:
@@ -90,7 +104,9 @@ def format_event(event, config) -> str:
     severity = _get(event, "severity", "context")
     category = _get(event, "category", "context")
     title = _get(event, "title_fa") or "بدون تیتر"
-    body = util.truncate(_get(event, "body_fa"), int(config.get("app.max_body_chars", 700)))
+    body = util.truncate(
+        _get(event, "body_fa"), int(config.get("app.max_body_chars", 700))
+    )
     confidence = _get(event, "confidence", "single")
     source = _get(event, "primary_source") or "نامشخص"
     url = _get(event, "primary_url") or ""

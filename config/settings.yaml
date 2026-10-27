@@ -9,6 +9,9 @@ app:
   entity_boost_threshold: 0.45
   # حداکثر طول متن خروجی (تلگرام ۴۰۹۶ کاراکتر)
   max_body_chars: 700
+  # سقف متنی که برای ترجمه به LLM داده می‌شود (هزینه‌ی توکن؛ پیام منتشرشده
+  # در هر حال تا max_body_chars بریده می‌شود)
+  max_translate_chars: 4000
   # نگه‌داری آیتم‌های خام در دیتابیس (پاک‌سازی خودکار روزانه)
   retention_days: 30
 
@@ -33,6 +36,24 @@ poll:
     - /topic/
     - /author/
 
+  # ── سقف بدنه (body caps) برای هر کالکتور ──────────────────
+  # طول متن خامی که از هر منبع ذخیره/پردازش می‌شود؛ خروجی منتشرشده جداگانه
+  # با app.max_body_chars سقف می‌خورد.
+  max_feed_body_chars: 1200
+  max_telegram_body_chars: 1200
+  max_x_body_chars: 1000
+  max_instagram_body_chars: 2200
+
+  # ── متن کامل مقاله ────────────────────────────────────────
+  # اگر خلاصه‌ی فید کوتاه یا بریده («…») باشد، متن کامل از لینک خبر گرفته
+  # می‌شود تا دسته‌بندی، خوشه‌بندی و ترجمه کل مقاله را ببینند. هر خطا بی‌صدا
+  # رد می‌شود و خبر با همان خلاصه ادامه می‌یابد.
+  fetch_full_article: true
+  article_max_chars: 6000
+  article_timeout_seconds: 10
+  # خلاصه‌های بلندتر از این را کامل فرض کن و دنبال مقاله نرو (حجم/سرعت)
+  article_min_summary_chars: 400
+
 # ── GDELT (متن‌باز، بدون کلید) ────────────────────────────────
 # پروژه‌ی GDELT اخبار جهان را لحظه‌ای نمایه می‌کند؛ کالکتورش با چند کوئری
 # دقیق «ایران + حریم هوایی» از API رایگانش می‌خواند و مکمل RSSهاست.
@@ -48,6 +69,30 @@ gdelt:
 # (مثلاً فید عمومی NASA DIP یا RSS) جایگزین شود؛ فعلاً خاموش است.
 notam:
   enabled: false
+
+# ── پایش هشتگ (تلگرام / X / اینستاگرام) ─────────────────────
+# این هشتگ‌ها در پیام‌های کانال‌های تلگرام و توییت‌های X دنبال می‌شوند، یک
+# کوئری هشتگی به جست‌وجوی X اضافه می‌کنند و (اگر ENABLE_INSTAGRAM=true باشد)
+# جست‌وجوی هشتگی اینستاگرام هم روی همین فهرست می‌رود.
+# کالکتورها فقط هشتگ‌های این فهرست را به‌عنوان «سیگنال» به فیلتر ربط تزریق
+# می‌کنند؛ #TehranFIR به «Tehran FIR» باز می‌شود تا مثل خبر عادی سنجیده شود.
+hashtags:
+  enabled: true
+  watchlist:
+    - TehranFIR
+    - IranAirspace
+    - OIIE
+    - OIII
+    - OIIX
+    - IranAir
+    - MahanAir
+  instagram:
+    # فعال‌سازی فقط با ENABLE_INSTAGRAM=true (+ اختیاری: INSTAGRAM_USERNAME/PASSWORD)
+    # ⚠️ اسکرپینگ اینستاگرام خلاف شرایط سرویس است؛ مسئولیت با فعال‌کننده است.
+    seconds: 900
+    max_posts_per_tag: 12
+    # زبان کپشن‌های اینستاگرام برای مسیر مترجم؛ «en» یعنی حتماً ترجمه شود
+    lang: en
 
 notifications:
   # فقط این شدت‌ها با صدا می‌روند؛ بقیه بی‌صدا ولی همان لحظه
@@ -154,6 +199,12 @@ relevance:
     - havayolu
     - havalimanı
     - "hava sahası"
+    - sefer
+    - seferler
+    - seferlerini
+    - iptal
+    - uçuş
+    - uçuşlar
     - авиакомпания
     - аэропорт
     - самолет
@@ -217,6 +268,12 @@ relevance:
     - "مسیر پرواز"
     - hava sahası
     - "uçuşlar iptal"
+    - iptal
+    - sefer
+    - seferler
+    - seferlerini
+    - uçuş
+    - uçuşlar
     - "воздушное пространство"
     - "рейсы отменены"
     - "المجال الجوي"
@@ -251,6 +308,83 @@ relevance:
     - صاروخ
     - 战争
     - 导弹
+
+  # فرودگاه‌های خارجی که صرفاً با یک اشاره‌ی سیاسی/جنگی به ایران نباید
+  # خبر ایران‌محور تلقی شوند (مگر آنکه سیگنال عملیاتی حریم هوایی داشته باشند).
+  foreign_airport_keywords:
+    - riyadh
+    - "king khalid"
+    - jeddah
+    - dammam
+    - "king fahd"
+    - "king abdulaziz"
+    - dubai
+    - doha
+    - "abu dhabi"
+    - istanbul
+    - baghdad
+    - baku
+    - tbilisi
+    - muscat
+    - kuwait
+    - cairo
+    - amman
+    - beirut
+    - damascus
+    - karachi
+    - lahore
+    - bangkok
+    - "western sydney"
+    - ریاض
+    - جده
+    - دمام
+    - "ملک فهد"
+    - "ملک عبدالعزیز"
+    - دبی
+    - دوحه
+    - استانبول
+    - بغداد
+    - باکو
+    - مسقط
+    - قاهره
+
+  # واژه‌های غیرعملیاتی: خروجی‌های خبری درباره‌ی پرسنل، بازنشستگی، بودجه،
+  # خرید نظامی و جنگ‌افزار نباید با «ایران + هوانوردی» قاطی شوند.
+  non_operational_keywords:
+    - retire
+    - retired
+    - retirement
+    - pension
+    - veteran
+    - employees
+    - personnel
+    - payroll
+    - budget
+    - procurement
+    - "air force"
+    - airbase
+    - "air base"
+    - military
+    - defence
+    - defense
+    - missile
+    - drone
+    - fighter
+    - warplane
+    - بازنشست
+    - مستمری
+    - حقوق بازنشست
+    - کارکنان
+    - پرسنل
+    - بودجه
+    - خرید نظامی
+    - نیروی هوایی
+    - جنگنده
+    - پهپاد
+    - نظامی
+    - askeri
+    - "hava kuvvetleri"
+    - "военно-воздушные"
 
 # ── دسته‌بندی ────────────────────────────────────────────────
 categories:
