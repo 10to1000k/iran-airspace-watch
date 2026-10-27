@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json_dumps
 import logging
 from datetime import timedelta
 
@@ -13,6 +14,9 @@ from .translator import Translator
 log = logging.getLogger(__name__)
 
 SEVERITY_RANK = {"context": 0, "important": 1, "critical": 2}
+
+# هر خبر با اعتماد پایین‌تر از این آستانه، رد می‌شود (مثلاً 0.30 = ۳۰٪)
+MIN_CONFIDENCE = 0.30
 
 
 class Pipeline:
@@ -36,6 +40,15 @@ class Pipeline:
             classification = self.classifier.classify(item)
             if not classification.relevant:
                 return "irrelevant"
+
+            # فیلتر ربط سخت‌گیرانه است؛ امتیاز اعتماد فقط برای تشخیص و گزارش است،
+            # نه یک دروازه‌ی دوم که خبرهای معتبر را بی‌صدا حذف کند.
+            if classification.confidence_score < MIN_CONFIDENCE:
+                log.debug(
+                    "اعتماد پایین (%.2f) ولی مرتبط: %s",
+                    classification.confidence_score,
+                    item.title[:70],
+                )
 
             tokens = util.tokens(f"{item.title} {item.body}")
             existing = self._find_cluster(tokens, classification)
@@ -65,7 +78,10 @@ class Pipeline:
                 continue
             other = set((row["tokens"] or "").split())
             score = util.jaccard(tokens, other)
-            same_entity = bool(classification.entity_key) and row["entity_key"] == classification.entity_key
+            same_entity = (
+                bool(classification.entity_key)
+                and row["entity_key"] == classification.entity_key
+            )
             if (score >= threshold) or (same_entity and score >= boost):
                 if score > best_score:
                     best, best_score = row, score
@@ -83,21 +99,26 @@ class Pipeline:
         )
 
         confidence = "official" if item.tier == 0 else "single"
-        event_id, created = self.db.create_event({
-            "fingerprint": fp,
-            "tokens": tokens,
-            "entity_key": cls.entity_key,
-            "category": cls.category,
-            "severity": cls.severity,
-            "countries": cls.countries,
-            "airlines": cls.airlines,
-            "title_fa": translation.title_fa or item.title,
-            "body_fa": translation.text_fa,
-            "confidence": confidence,
-            "numbers_ok": 1 if translation.numbers_ok else 0,
-            "primary_url": item.url,
-            "primary_source": item.source_name,
-        })
+        event_id, created = self.db.create_event(
+            {
+                "fingerprint": fp,
+                "tokens": tokens,
+                "entity_key": cls.entity_key,
+                "category": cls.category,
+                "severity": cls.severity,
+                "countries": cls.countries,
+                "airlines": cls.airlines,
+                "title_fa": translation.title_fa or item.title,
+                "body_fa": translation.text_fa,
+                "confidence": confidence,
+                "numbers_ok": 1 if translation.numbers_ok else 0,
+                "primary_url": item.url,
+                "primary_source": item.source_name,
+                "extra": _json_dumps(item.extra, ensure_ascii=False)
+                if item.extra
+                else None,
+            }
+        )
         if not created:
             # رقیب زودتر ساخته — مثل به‌روزرسانی رفتار می‌کنیم
             row = self.db.get_event(event_id)
@@ -108,7 +129,9 @@ class Pipeline:
         self.db.attach_item_to_event(item.source_id, fp, event_id)
         event = self.db.get_event(event_id)
         if not self._deliver_event(event):
-            log.warning("رخداد %d ثبت شد ولی ارسال تلگرام به چرخه‌ی بعد موکول شد", event_id)
+            log.warning(
+                "رخداد %d ثبت شد ولی ارسال تلگرام به چرخه‌ی بعد موکول شد", event_id
+            )
             return "queued"
         log.info("منتشر شد [%s/%s] %s", cls.severity, cls.category, item.title[:70])
         return "published"
@@ -182,12 +205,18 @@ class Pipeline:
                     int(refreshed["root_message_id"]),
                     formatter.format_event(refreshed, self.cfg),
                     chat_id=refreshed["chat_id"],
-                    keyboard=self.bot.feedback_keyboard(event_id, refreshed["primary_url"]),
+                    keyboard=self.bot.feedback_keyboard(
+                        event_id, refreshed["primary_url"]
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.debug("ویرایش پیام ریشه ناموفق: %s", exc)
 
-        if new_source and int(refreshed["sources_count"]) <= 3 and refreshed["root_message_id"]:
+        if (
+            new_source
+            and int(refreshed["sources_count"]) <= 3
+            and refreshed["root_message_id"]
+        ):
             try:
                 self.bot.send(
                     formatter.format_update(refreshed, item.source_name),
@@ -195,7 +224,9 @@ class Pipeline:
                     silent=self._silent(refreshed["severity"]),
                 )
             except Exception as exc:  # noqa: BLE001
-                log.warning("ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc)
+                log.warning(
+                    "ارسال پیام به‌روزرسانی رخداد %d ناموفق بود: %s", event_id, exc
+                )
 
         log.info("به‌روزرسانی [%s] %s", event_id, item.title[:70])
         return "updated"

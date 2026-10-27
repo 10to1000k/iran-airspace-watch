@@ -142,6 +142,12 @@ relevance:
     - havayolu
     - havalimanı
     - "hava sahası"
+    - sefer
+    - seferler
+    - seferlerini
+    - iptal
+    - uçuş
+    - uçuşlar
     - авиакомпания
     - аэропорт
     - самолет
@@ -205,6 +211,12 @@ relevance:
     - "مسیر پرواز"
     - hava sahası
     - "uçuşlar iptal"
+    - iptal
+    - sefer
+    - seferler
+    - seferlerini
+    - uçuş
+    - uçuşlar
     - "воздушное пространство"
     - "рейсы отменены"
     - "المجال الجوي"

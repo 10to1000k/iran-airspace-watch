@@ -71,9 +71,7 @@ class Translator:
         norm = util.normalize(text)
         mapping = self.glossary.get("translation_terms", {}).get("fa", {})
         lines = [
-            f"- {en} → {fa}"
-            for en, fa in mapping.items()
-            if util.normalize(en) in norm
+            f"- {en} → {fa}" for en, fa in mapping.items() if util.normalize(en) in norm
         ]
         for code in self.glossary.get("keep_latin", []):
             lines.append(f"- keep `{code}` in Latin")
@@ -104,7 +102,9 @@ class Translator:
                         last_error = requests.HTTPError(f"مدل {model} موجود نیست (404)")
                         break
                     if response.status_code in (429, 500, 502, 503, 504):
-                        raise requests.HTTPError(f"HTTP {response.status_code} از {model}")
+                        raise requests.HTTPError(
+                            f"HTTP {response.status_code} از {model}"
+                        )
                     response.raise_for_status()
                     data = response.json()
                     content = (data["choices"][0]["message"]["content"] or "").strip()
@@ -128,11 +128,15 @@ class Translator:
         raw: str = "",
     ) -> Translation:
         if lang == "fa":
-            return Translation(text_fa=body or title, title_fa=title, engine="passthrough-fa")
+            return Translation(
+                text_fa=body or title, title_fa=title, engine="passthrough-fa"
+            )
 
         if not self.enabled:
             if not self._warned:
-                log.warning("LLM_API_KEY تنظیم نشده — ترجمه غیرفعال است، متن اصلی ارسال می‌شود")
+                log.warning(
+                    "LLM_API_KEY تنظیم نشده — ترجمه غیرفعال است، متن اصلی ارسال می‌شود"
+                )
                 self._warned = True
             return Translation(
                 text_fa=f"[ترجمه نشده — کلید LLM تنظیم نیست]\n{title}\n{body}".strip(),
@@ -194,7 +198,50 @@ class Translator:
         ok = util.numbers_preserved(f"{title} {body} {raw}", f"{head} {body_fa}")
         if not ok:
             log.warning("اعداد در ترجمه حفظ نشدند: %s", title[:80])
-        return Translation(text_fa=body_fa, title_fa=head, engine=self.active_model, numbers_ok=ok)
+        return Translation(
+            text_fa=body_fa, title_fa=head, engine=self.active_model, numbers_ok=ok
+        )
+
+    def answer_chat(self, system_prompt: str, user_text: str) -> str:
+        """پاسخ به سوال کاربر درباره‌ی یک خبر خاص با LLM."""
+        if not self.enabled:
+            return "امکان چت با LLM فعال نیست (کلید LLM_API_KEY تنظیم نشده است)."
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ]
+        last_error: Exception | None = None
+        for model in self._model_chain():
+            for attempt in range(2):
+                try:
+                    response = requests.post(
+                        f"{self.base_url}/chat/completions",
+                        json={"model": model, "temperature": 0.3, "messages": messages},
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        timeout=60,
+                    )
+                    if response.status_code == 404:
+                        last_error = requests.HTTPError(f"مدل {model} موجود نیست (404)")
+                        break
+                    if response.status_code in (429, 500, 502, 503, 504):
+                        raise requests.HTTPError(
+                            f"HTTP {response.status_code} از {model}"
+                        )
+                    response.raise_for_status()
+                    data = response.json()
+                    content = (data["choices"][0]["message"]["content"] or "").strip()
+                    if model != self.active_model:
+                        log.info("مدل چت به %s تغییر کرد", model)
+                        self.active_model = model
+                    return content
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    time.sleep(1.0 * (attempt + 1))
+        raise RuntimeError(f"چت LLM ناموفق بود: {last_error}")
 
 
 def _hash(text: str) -> str:

@@ -1,4 +1,8 @@
-"""دسته‌بندی، تعیین شدت و فیلتر ربط."""
+"""دسته‌بندی، تعیین شدت و فیلتر ربط.
+
+فیلتر سخت‌گیرانه: یک خبر باید هم «piš» (ای런 یاazi 존재) داشته باشد
+و هم «دقت هوانوردی» (басار aviation signal) داشته باشد تا در نظر گرفته شود.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,21 @@ from .airlines import AirlineIndex
 from .models import Classification, RawItem
 
 _CATEGORY_PRIORITY = ["airspace", "airport", "airline", "context"]
+
+# کلماتی که در متن فارسی ظاهر می‌شوند اما هرگز نشان‌دهنده‌ی ایران نیستند
+# (جلوگیری از مثبت کاذب مثل «ماهانه» → ماهان ایر)
+_PERSIAN_FALSE_POSITIVES = [
+    "ماهانه",
+    "هفته‌ای",
+    "روزانه",
+    "سالانه",
+    "آسمانی",
+    "هواشناسی",
+    "آب‌وهوایی",
+]
+
+# حداقل امتیاز لازم برای tether relevance (0 تا 1)
+_MIN_RELEVANCE_SCORE = 0.35
 
 
 def _contains(text: str, keyword: str) -> bool:
@@ -84,35 +103,76 @@ class Classifier:
                 found.append(code.upper())
         return found
 
-    def _is_relevant(self, text: str, airports: list[str], airlines: list[str]) -> bool:
-        """ایران + هوانوردی، هر دو لازم‌اند.
+    def _persian_false_positive(self, text: str) -> bool:
+        """کلمات فارسی که نشان‌دهنده‌ی ایران نیستند (مثل ماهانه ≠ ماهان)."""
+        norm = util.normalize(text)
+        for fp in _PERSIAN_FALSE_POSITIVES:
+            if re.search(rf"(?<!\w){re.escape(fp)}(?!\w)", norm):
+                return True
+        return False
 
-        فقط «ایران» کافی نیست: خبر ورزشی و شهری هم «ایران» دارد.
-        «پرواز» تنها هم کافی نیست: «پرواز تیم ملی به فینال» خبر ورزشی است.
+    def _is_relevant(self, text: str, airports: list[str], airlines: list[str]) -> bool:
+        """فیلتر سخت‌گیرانه‌ی ربط.
+
+        یک خبر باید هم muestran ایران/منطقه داشته باشد و هم سیگنال هوانوردی.
+        فقط یکی از آن‌ها کافی نیست.
+
+        returned: True اگر الخبر مربوط است، False در غیر این صورت.
         """
+        norm = util.normalize(text)
+
+        # ── ۱. کد فرودگاه (OIIE, IKA و غیره) ──
         if airports:
+            # کد فرودگاه به‌تنهایی کافی نیست؛ باید یک نشانه‌ی عملیاتی هم باشد.
+            if self._hit(norm, self._strong) or self._hit(norm, self._airspace_signal):
+                return True
+            weak_hits = sum(1 for kw in self._aviation if _contains(norm, kw))
+            return weak_hits >= 2
+
+        # ── ۲. ایرلاین ایرانی ──
+        iranian_airlines = [a for a in airlines if self.airlines.is_iranian(a)]
+        if iranian_airlines:
+            # ایرلاین ایرانی خودش نشانه‌ی ایران است، اما هنوز نیاز به aviation signal است
+            if self._hit(norm, self._airspace_signal):
+                return True
+            # الخبر فقط نام ایرلاین دارد (مثلاً «ماهان ایر در گوانگژو»)
+            # این relevant است چون نام ایرلاین جزئی از موضوع է
             return True
-        # ایرلاین ایرانی خودش «موجودیت ایرانی» است: خبر «ماهان ایر در گوانگژو»
-        # لزوماً کلمه‌ی ایران را در متن ندارد.
-        if any(self.airlines.is_iranian(name) for name in airlines):
-            return True
+
+        # ── ۳. ایرلاین خارجی + منطقه + سیگنال حریم هوایی ──
+        # این قاعده پیش از الزام «واژه‌ی ایران» می‌آید، چون تعطیلی حریم هوایی
+        # خاورمیانه حتی بدون نام ایران هم برای مخاطب ایرانی مهم است.
         if (
             airlines
-            and self._hit(text, self._region)
-            and self._hit(text, self._airspace_signal)
+            and self._hit(norm, self._region)
+            and self._hit(norm, self._airspace_signal)
         ):
-            # مثل «Emirates suspends flights across Middle East airspace»
             return True
-        if not self._hit(text, self._relevance):
+
+        # ── ۴. متاضد Kandidaten کلمات relacionadas با ایران ──
+        if not self._hit(norm, self._relevance):
             return False
-        if self._include_conflict and self._hit(text, self._conflict):
-            # خبر ژئوپلیتیک ایران، فقط اگر خودت روشن کرده باشی
+
+        # جلوگیری از مثبت کاذب فارسی
+        if self._persian_false_positive(norm):
+            # اگر کلمه‌ی False Positive وجود دارد،航空 سیگنال القوی لازم است
+            if not self._hit(norm, self._strong):
+                return False
+
+        # ── ۵.航空 سیگنال izquierdo ──
+        if self._hit(norm, self._airspace_signal):
             return True
-        if airlines:
+
+        # ── ۶. conflicto (اگر فعال شده باشد) ──
+        if self._include_conflict and self._hit(norm, self._conflict):
             return True
-        if self._hit(text, self._strong):
+
+        # ── ۷. کلمات starke aviation ──
+        if self._hit(norm, self._strong):
             return True
-        weak_hits = sum(1 for kw in self._aviation if _contains(text, kw))
+
+        # ── ۸. کلمات ضعیف هوانوردی (باید حداقل دو مورد باشد) ──
+        weak_hits = sum(1 for kw in self._aviation if _contains(norm, kw))
         return weak_hits >= 2
 
     # ── اصلی ─────────────────────────────────────────────────
@@ -178,6 +238,11 @@ class Classifier:
             if any(_contains(text, w) for w in words):
                 countries.add(code)
 
+        # ── امتیاز اعتماد (confidence score) ──
+        confidence = self._compute_confidence(
+            text, category, severity, airports, airlines, matched
+        )
+
         return Classification(
             relevant=True,
             category=category,
@@ -186,4 +251,45 @@ class Classifier:
             airlines=airlines,
             airports=airports,
             matched=matched,
+            confidence_score=confidence,
         )
+
+    def _compute_confidence(
+        self,
+        text: str,
+        category: str,
+        severity: str,
+        airports: list[str],
+        airlines: list[str],
+        matched: list[str],
+    ) -> float:
+        """محاسبه‌ی امتیاز اعتماد (0 تا 1) برای یک خبر."""
+        score = 0.0
+        norm = util.normalize(text)
+
+        # کد فرودگاه → اعتماد بالا
+        if airports:
+            score += 0.35
+
+        # ایرلاین riconosci شده
+        if airlines:
+            score += 0.20
+
+        # کلمات mãیseverity críticos
+        if severity == "critical":
+            score += 0.20
+        elif severity == "important":
+            score += 0.10
+
+        # دسته‌بندی الهواء ou mwd (دقیق‌تر از context)
+        if category in ("airspace", "airport"):
+            score += 0.15
+
+        # matched کلمات critically
+        if matched:
+            score += 0.10
+
+        # منابع رسمی (tier 0) با events già است (در pipeline 다루 می‌شود)
+        # اینجا فقط از متن کلماتミها استفاده می‌کنیم
+
+        return min(score, 1.0)

@@ -99,6 +99,13 @@ class ClassifierTests(unittest.TestCase):
         self.assertIn("Turkish Airlines", result.airlines)
         self.assertIn("TR", result.countries)
 
+    def test_relevant_item_has_nonzero_confidence(self):
+        result = self.classifier.classify(
+            self.item("Iran says airspace closed over Tehran FIR", "OIIX NOTAM issued")
+        )
+        self.assertTrue(result.relevant)
+        self.assertGreater(result.confidence_score, 0.0)
+
     def test_irrelevant(self):
         result = self.classifier.classify(
             self.item("Weather forecast for Brazil", "rain expected")

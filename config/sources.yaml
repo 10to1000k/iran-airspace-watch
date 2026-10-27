@@ -101,6 +101,12 @@ sources:
   - {id: me_aljazeera,name: Al Jazeera,      type: rss, url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, country: INTL, tier: 2}
   - {id: me_mee,      name: Middle East Eye, type: rss, url: "https://www.middleeasteye.net/rss", lang: en, country: INTL, tier: 2}
 
+  # منابع جدید (افزوده‌شده برای پوشش بهتر)
+  - {id: ae_zawya,    name: Zawya,          type: rss, url: "https://www.zawya.com/rss", lang: en, country: AE, tier: 2, enabled: false}
+  - {id: tr_euronews, name: Euronews TR,    type: rss, url: "https://tr.euronews.com/rss", lang: tr, country: TR, tier: 2, enabled: false}
+  - {id: ir_tasnim,   name: Tasnim News,    type: rss, url: "https://www.tasnimnews.com/rss", lang: fa, country: IR, tier: 0}
+  - {id: ir_fars,     name: Fars News,      type: rss, url: "https://www.farsnews.ir/rss", lang: fa, country: IR, tier: 0}
+
 # کانال‌های تلگرامی — پایش لحظه‌ای (اختیاری):
 # نیاز به ENABLE_TELEGRAM_CHANNELS=true + TELEGRAM_API_ID/HASH + یک‌بار لاگین سشن (کالکتور telethon). پیام‌ها لحظه‌ای می‌رسند و برای کانال خصوصی لازم است.
 # نکته: پیش‌نویس وب t.me/s بدون لاگین خالی است (تلگرام با جاوااسکریپت رندر می‌شود) و از آن استفاده نشده است.

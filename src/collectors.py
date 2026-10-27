@@ -9,6 +9,7 @@ import asyncio
 import calendar
 import logging
 import queue
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -239,7 +240,10 @@ class TelegramChannelCollector:
                     published_at=message.date.astimezone(timezone.utc)
                     if message.date
                     else util.now_utc(),
-                    extra={"tier": 1},
+                    extra={
+                        "tier": 1,
+                        "hashtags": extract_hashtags(text),
+                    },
                 )
             )
 
@@ -331,13 +335,14 @@ class XCollector:
                     continue
                 if tweet.retweetedTweet:
                     continue
+                tweet_text = tweet.rawContent or ""
                 out.append(
                     RawItem(
                         source_id=f"x_{tweet.user.username}",
                         source_name=f"@{tweet.user.username}",
                         source_url=f"https://x.com/{tweet.user.username}",
-                        title=(tweet.rawContent or "").split("\n", 1)[0][:200],
-                        body=util.truncate(tweet.rawContent or "", 1000),
+                        title=tweet_text.split("\n", 1)[0][:200],
+                        body=util.truncate(tweet_text, 1000),
                         url=f"https://x.com/{tweet.user.username}/status/{tweet.id}",
                         lang="en",
                         country="INTL",
@@ -347,6 +352,7 @@ class XCollector:
                             "tier": 1,
                             "likes": tweet.likeCount,
                             "reposts": tweet.retweetCount,
+                            "hashtags": extract_hashtags(tweet_text),
                         },
                     )
                 )
@@ -356,6 +362,13 @@ class XCollector:
 def _flag_direct(config, name: str) -> bool:
     raw = config.env_get(name, "false") or "false"
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def extract_hashtags(text: str) -> list[str]:
+    """هشتگ‌های #abc را از متن استخراج می‌کند."""
+    if not text:
+        return []
+    return re.findall(r"#[\w\u0600-\u06FF]+", text)
 
 
 class CollectorJob:

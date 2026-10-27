@@ -18,7 +18,7 @@ class RawItem:
     url: str
     lang: str = "en"
     country: str = "INTL"
-    kind: str = "rss"          # rss | notam | telegram | x
+    kind: str = "rss"  # rss | notam | telegram | x
     published_at: datetime | None = None
     extra: dict = field(default_factory=dict)
 
@@ -43,6 +43,7 @@ class Classification:
     airlines: list[str] = field(default_factory=list)
     airports: list[str] = field(default_factory=list)
     matched: list[str] = field(default_factory=list)
+    confidence_score: float = 0.0
 
     @property
     def entity_key(self) -> str:
