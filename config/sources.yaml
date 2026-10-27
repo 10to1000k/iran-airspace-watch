@@ -9,7 +9,8 @@ sources:
   - {id: tr_aa_en,   name: Anadolu (EN),    type: rss, url: "https://www.aa.com.tr/en/rss/default?cat=guncel", lang: en, country: TR, tier: 2}
   - {id: tr_aa_ar,   name: Anadolu (AR),    type: rss, url: "https://www.aa.com.tr/ar/rss/default?cat=guncel", lang: ar, country: TR, tier: 2}
   - {id: tr_trt,     name: TRT Haber,       type: rss, url: "https://www.trthaber.com/sondakika_articles.rss", lang: tr, country: TR, tier: 2}
-  - {id: tr_hurriyet,name: Hürriyet,        type: rss, url: "https://www.hurriyet.com.tr/rss/anasayfa", lang: tr, country: TR, tier: 2}
+  # Hürriyet در دو تست زنده پیاپی تایم‌اوت شد؛ AA و TRT پوشش ترکیه را دارند.
+  - {id: tr_hurriyet,name: Hürriyet,        type: rss, url: "https://www.hurriyet.com.tr/rss/anasayfa", lang: tr, country: TR, tier: 2, enabled: false}
   - {id: tr_sozcu,   name: Sözcü,           type: rss, url: "https://www.sozcu.com.tr/feeds-rss-category-gundem", lang: tr, country: TR, tier: 2}
   # 403 (Cloudflare) — فعلاً خاموش
   - {id: tr_duvar,   name: Gazete Duvar,    type: rss, url: "https://www.gazeteduvar.com.tr/rss", lang: tr, country: TR, tier: 2, enabled: false}
@@ -51,6 +52,8 @@ sources:
   - {id: ir_isna_en,  name: ISNA (EN),      type: rss, url: "https://en.isna.ir/rss", lang: en, country: IR, tier: 0}
   - {id: ir_tehrantimes,name: Tehran Times, type: rss, url: "https://www.tehrantimes.com/rss", lang: en, country: IR, tier: 0}
   - {id: ir_iranintl, name: Iran International,type: rss, url: "https://www.iranintl.com/en/feed", lang: en, country: IR, tier: 2}
+  # WANA (WANA News Agency) — پوشش انگلیسی ایران؛ فید زنده تست شد (۱۰ آیتم).
+  - {id: ir_wana_en,  name: WANA (EN),        type: rss, url: "https://wanaen.com/feed/", lang: en, country: IR, tier: 2}
 
   # ── هوانوردی ───────────────────────────────────────────────
   - {id: av_fr24,     name: Flightradar24 Blog, type: rss, url: "https://www.flightradar24.com/blog/feed/", lang: en, country: INTL, tier: 1}
@@ -61,6 +64,8 @@ sources:
   - {id: av_jacdec,   name: JACDEC,          type: rss, url: "https://www.jacdec.de/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_airlinegeeks,name: AirlineGeeks, type: rss, url: "https://airlinegeeks.com/feed/", lang: en, country: INTL, tier: 1}
   - {id: av_aviation24,name: Aviation24.be,  type: rss, url: "https://www.aviation24.be/feed/", lang: en, country: INTL, tier: 1}
+  # ch-aviation خبرهای عملیاتی ایرلاین‌ها (از جمله ایران) را زودتر و کامل‌تر پوشش می‌دهد.
+  - {id: av_ch_aviation,name: ch-aviation,   type: rss, url: "https://www.ch-aviation.com/portal/news/feed", lang: en, country: INTL, tier: 1}
   # Aviation Herald RSS ندارد (بررسی شد)
   - {id: av_herald,   name: The Aviation Herald, type: rss, url: "https://avherald.com/rss", lang: en, country: INTL, tier: 1, enabled: false}
 
@@ -104,8 +109,9 @@ sources:
   # منابع جدید (افزوده‌شده برای پوشش بهتر)
   - {id: ae_zawya,    name: Zawya,          type: rss, url: "https://www.zawya.com/rss", lang: en, country: AE, tier: 2, enabled: false}
   - {id: tr_euronews, name: Euronews TR,    type: rss, url: "https://tr.euronews.com/rss", lang: tr, country: TR, tier: 2, enabled: false}
-  - {id: ir_tasnim,   name: Tasnim News,    type: rss, url: "https://www.tasnimnews.com/rss", lang: fa, country: IR, tier: 0}
-  - {id: ir_fars,     name: Fars News,      type: rss, url: "https://www.farsnews.ir/rss", lang: fa, country: IR, tier: 0}
+  # Tasnim/Fars در تست زنده ۱۴۰۵/۰۸/۰۵ خراب بودند (DNS/SSL) — بعداً دوباره بررسی شود.
+  - {id: ir_tasnim,   name: Tasnim News,    type: rss, url: "https://www.tasnimnews.com/rss", lang: fa, country: IR, tier: 0, enabled: false}
+  - {id: ir_fars,     name: Fars News,      type: rss, url: "https://www.farsnews.ir/rss", lang: fa, country: IR, tier: 0, enabled: false}
 
 # کانال‌های تلگرامی — پایش لحظه‌ای (اختیاری):
 # نیاز به ENABLE_TELEGRAM_CHANNELS=true + TELEGRAM_API_ID/HASH + یک‌بار لاگین سشن (کالکتور telethon). پیام‌ها لحظه‌ای می‌رسند و برای کانال خصوصی لازم است.

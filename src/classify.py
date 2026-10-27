@@ -29,6 +29,21 @@ _PERSIAN_FALSE_POSITIVES = [
 # حداقل امتیاز لازم برای tether relevance (0 تا 1)
 _MIN_RELEVANCE_SCORE = 0.35
 
+# «تهران-ایرنا» و «TEHRAN (IRNA)» ابتدای خبر، محل انتشار را نشان می‌دهند
+# نه محل رخداد. اگر حذف نشوند، خبر فرودگاه عربستان «ایران‌محور» می‌شود.
+_DATELINE_RE = re.compile(
+    r"^\s*(?:"
+    r"تهران\s*[-–—]\s*(?:ایرنا|مهر|ایسنا|تسنیم|فارس)\s*[-–—]\s*"
+    r"|(?:TEHRAN|Tehran)\s*[\(\,]\s*(?:IRNA|Tasnim|Mehr|ISNA|FNA|MNA)\s*[\)]?\s*[-–—]?\s*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _strip_dateline(text: str) -> str:
+    """سرصفحه‌ی خبرگزاری را از ابتدای متن حذف می‌کند."""
+    return _DATELINE_RE.sub("", text or "", count=1)
+
 
 def _contains(text: str, keyword: str) -> bool:
     """کلمات کوتاه لاتین باید مرز کلمه داشته باشند تا «THR» با «through» قاطی نشود."""
@@ -191,7 +206,9 @@ class Classifier:
     def classify(self, item: RawItem) -> Classification:
         # سقف طول متن: صفحه‌های بلند به‌طور تصادفی کلیدواژه‌های ایران و هوانوردی را کنار هم دارند
         raw_text = (item.text or "")[: self._max_match_chars]
-        text = util.normalize(raw_text)
+        # سرصفحه‌ی «تهران-ایرنا» نباید به‌عنوان نشانه‌ی ایران شمرده شود.
+        content_raw = _strip_dateline(raw_text)
+        text = util.normalize(content_raw)
         airports = self._airports_in(raw_text)
         # مهم: متن اصلی (قبل از lowercase شدن) به AirlineIndex داده می‌شود تا کدهای ۳حرفی
         # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
@@ -219,16 +236,17 @@ class Classifier:
             severity = self._base_severity.get(category, "context")
 
         # کشورها را از سیگنال‌های واقعی ایران بساز؛ «IR» را به همه‌ی رخدادها نچسبان.
+        # country در منبع یعنی کشور ناشر، نه کشور رخداد: خبرگزاری ایرانی ممکن است
+        # خبری درباره‌ی عربستان منتشر کند. پس IR فقط از محتوا می‌آید.
         countries: set[str] = set()
         iran_signal = (
             bool(airports)
             or any(self.airlines.is_iranian(a) for a in airlines)
-            or item.country == "IR"
             or self._hit(text, self._relevance)
         )
         if iran_signal:
             countries.add("IR")
-        if item.country and item.country not in ("INTL", ""):
+        if item.country and item.country not in ("INTL", "", "IR"):
             countries.add(item.country)
         country_map = {
             "TR": ["ترکیه", "turkey", "türkiye", "турция"],
@@ -253,6 +271,16 @@ class Classifier:
             "OM": ["عمان", "oman", "muscat", "مسقط"],
             "AZ": ["آذربایجان", "azerbaijan", "baku", "باکو"],
             "GE": ["گرجستان", "georgia", "tbilisi", "تفلیس"],
+            "SA": [
+                "عربستان",
+                "saudi",
+                "riyadh",
+                "jeddah",
+                "dammam",
+                "ریاض",
+                "جده",
+                "دمام",
+            ],
         }
         for code, words in country_map.items():
             if any(_contains(text, w) for w in words):

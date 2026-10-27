@@ -247,6 +247,20 @@ class ClassifierTests(unittest.TestCase):
         )
         self.assertFalse(result.relevant)
 
+    def test_agency_dateline_does_not_create_iran_relevance(self):
+        """«تهران-ایرنا» در ابتدای خبر، خبر عربستان را ایران‌محور نمی‌کند."""
+        result = self.classifier.classify(
+            self.item(
+                "انفجارها شرق عربستان را لرزاند / توقف پروازها در فرودگاه ملک فهد دمام",
+                "تهران-ایرنا- رسانه‌ها و منابع سعودی از صدور هشدار در منطقه شرقی عربستان، "
+                "شنیده شدن صدای انفجار در این منطقه و شهر دمام و توقف فعالیت‌های پروازی "
+                "در فرودگاه بین‌المللی ملک فهد خبر داد.",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+        self.assertNotIn("IR", result.countries)
+
     def test_regional_airspace_story_does_not_force_ir_country(self):
         result = self.classifier.classify(
             self.item(
@@ -727,6 +741,75 @@ class KeepAliveTests(unittest.TestCase):
         )
         self.assertEqual(client.ensure_awake(now=now), "healthy")
         self.assertEqual(session.patches, [])
+
+
+class SourceConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.config = load_config()
+
+    def test_source_ids_are_unique(self):
+        ids = [s["id"] for s in self.config.sources.get("sources", [])]
+        ids += [c["id"] for c in self.config.sources.get("telegram_channels", [])]
+        duplicates = sorted(
+            {source_id for source_id in ids if ids.count(source_id) > 1}
+        )
+        self.assertEqual(duplicates, [])
+
+    def test_enabled_sources_have_required_fields(self):
+        for source in self.config.rss_sources:
+            with self.subTest(source=source.get("id")):
+                self.assertRegex(source.get("id", ""), r"^[a-z0-9_]+$")
+                self.assertTrue(source.get("name"))
+                self.assertTrue(
+                    source.get("url", "").startswith(("http://", "https://"))
+                )
+                self.assertIn(source.get("lang"), {"fa", "en", "tr", "ar", "ru"})
+                self.assertIn(
+                    source.get("country"),
+                    {
+                        "IR",
+                        "TR",
+                        "AE",
+                        "RU",
+                        "CN",
+                        "PK",
+                        "TH",
+                        "VN",
+                        "QA",
+                        "OM",
+                        "KW",
+                        "BH",
+                        "SA",
+                        "IQ",
+                        "SY",
+                        "LB",
+                        "AF",
+                        "AZ",
+                        "GE",
+                        "AM",
+                        "KZ",
+                        "UZ",
+                        "TM",
+                        "DE",
+                        "AT",
+                        "NL",
+                        "GB",
+                        "FR",
+                        "IN",
+                        "INTL",
+                    },
+                )
+                self.assertIn(source.get("tier"), {0, 1, 2, 3})
+
+    def test_known_broken_feeds_are_not_enabled(self):
+        enabled = {source["id"] for source in self.config.rss_sources}
+        self.assertNotIn("ir_fars", enabled)
+        self.assertNotIn("ir_tasnim", enabled)
+
+    def test_targeted_feeds_are_enabled(self):
+        enabled = {source["id"] for source in self.config.rss_sources}
+        self.assertIn("av_ch_aviation", enabled)
+        self.assertIn("ir_wana_en", enabled)
 
 
 class ManifestValidationTests(unittest.TestCase):
