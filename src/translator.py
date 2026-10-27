@@ -86,6 +86,9 @@ class Translator:
         self.fallbacks = config.llm_fallback_models
         self.active_model = self.model
         self.glossary = config.glossary
+        # سقف متنی که به LLM داده می‌شود (هزینه‌ی توکن)؛ متن کامل‌تر از این
+        # ترجمه نمی‌شود ولی بخش ابتدایی خبر — که منتشر می‌شود — پوشش داده می‌شود.
+        self.max_translate_chars = int(config.get("app.max_translate_chars", 4000))
         self._memory_cache: dict[str, str] = {}
         self._warned = False
 
@@ -205,6 +208,8 @@ class Translator:
             )
             cache_key = util.fingerprint(f"notam::{title}::{raw}")
         else:
+            if len(body) > self.max_translate_chars:
+                body = util.truncate(body, self.max_translate_chars)
             source_text = f"HEADLINE:\n{title}\n\nBODY:\n{body}"
             cache_key = util.fingerprint(f"{lang}::{title}::{body}")
 

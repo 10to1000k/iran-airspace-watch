@@ -7,6 +7,7 @@ import logging
 from datetime import timedelta
 
 from . import formatter, util
+from .article import fetch_article_text
 from .classify import Classifier
 from .models import RawItem
 from .translator import Translator
@@ -27,6 +28,12 @@ class Pipeline:
         self.health = health
         self.classifier = Classifier(config)
         self.translator = Translator(config, db)
+        self._fetch_full_article = bool(config.get("poll.fetch_full_article", True))
+        self._article_max_chars = int(config.get("poll.article_max_chars", 6000))
+        self._article_timeout = float(config.get("poll.article_timeout_seconds", 10))
+        self._article_min_summary = int(
+            config.get("poll.article_min_summary_chars", 400)
+        )
 
     # ── ورودی اصلی ───────────────────────────────────────────
     def process(self, item: RawItem) -> str:
@@ -37,6 +44,7 @@ class Pipeline:
             return "seen"
 
         try:
+            self._enrich_full_text(item)
             classification = self.classifier.classify(item)
             if not classification.relevant:
                 return "irrelevant"
@@ -61,6 +69,34 @@ class Pipeline:
             # تا در چرخه‌ی بعدی دوباره پردازش شود و برای همیشه نسوزد.
             self.db.delete_item(item.source_id, fp)
             raise
+
+    # ── متن کامل مقاله ───────────────────────────────────────
+    def _enrich_full_text(self, item: RawItem) -> None:
+        """اگر خلاصه‌ی فید کوتاه یا بریده باشد («…»)، متن کامل از لینک گرفته می‌شود.
+
+        فقط برای RSS است (تلگرام/X خودشان متن کامل پیام را می‌دهند). بدنه‌ی آیتم
+        با متن کامل جایگزین می‌شود تا دسته‌بندی، خوشه‌بندی و ترجمه کل مقاله را
+        ببینند؛ اثر انگشت پیش از این مرحله محاسبه شده و تغییری نمی‌کند. هر خطا
+        بی‌صدا رد می‌شود — خبر با همان خلاصه ادامه می‌یابد.
+        """
+        if not self._fetch_full_article or item.kind != "rss":
+            return
+        body = (item.body or "").strip()
+        if (
+            len(body) >= self._article_min_summary
+            and not body.endswith("…")
+        ):
+            return  # فید خودش متن کامل (یا تقریباً کامل) را داده است
+        full = fetch_article_text(
+            item.url,
+            max_chars=self._article_max_chars,
+            timeout=(5.0, self._article_timeout),
+        )
+        if len(full) > len(body):
+            log.debug(
+                "متن کامل مقاله گرفته شد (%d کاراکتر): %s", len(full), item.url[:100]
+            )
+            item.body = full
 
     # ── خوشه‌بندی ────────────────────────────────────────────
     def _find_cluster(self, tokens: set[str], classification):

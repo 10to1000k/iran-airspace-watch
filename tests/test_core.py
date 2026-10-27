@@ -608,6 +608,10 @@ class PipelineRecoveryTests(unittest.TestCase):
         from src.pipeline import Pipeline
 
         config = load_config(dry_run=False)
+        # متن کامل مقاله در تست شبکه نمی‌گیرد
+        config.settings.setdefault("poll", {})[
+            "fetch_full_article"
+        ] = False
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "test.db")
             try:
