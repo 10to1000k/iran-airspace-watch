@@ -18,7 +18,7 @@ class RawItem:
     url: str
     lang: str = "en"
     country: str = "INTL"
-    kind: str = "rss"  # rss | notam | telegram | x
+    kind: str = "rss"  # rss | notam | telegram | x | instagram
     published_at: datetime | None = None
     extra: dict = field(default_factory=dict)
 

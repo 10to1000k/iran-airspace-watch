@@ -39,6 +39,9 @@ _DATELINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# جداسازی camelCase برای هشتگ: «TehranFIR» → «Tehran FIR»، «MahanAir» → «Mahan Air»
+_HASHTAG_SPLIT_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
 
 def _strip_dateline(text: str) -> str:
     """سرصفحه‌ی خبرگزاری را از ابتدای متن حذف می‌کند."""
@@ -203,9 +206,28 @@ class Classifier:
         return weak_hits >= 2
 
     # ── اصلی ─────────────────────────────────────────────────
+    def _hashtag_signal(self, item: RawItem) -> str:
+        """هشتگ‌های تحت پایش را به متن قابل‌تطبیق تبدیل می‌کند.
+
+        پست‌های شبکه‌های اجتماعی کوتاه‌اند؛ «#TehranFIR» تنها با این تبدیل به
+        کلیدواژه‌ی «tehran fir» و «MahanAir» به نام ایرلاین تبدیل می‌شود.
+        کالکتورهای تلگرام/X/اینستاگرام فقط هشتگ‌های داخل watchlist را اینجا
+        می‌گذارند، پس سیگنال تزریقی همیشه از فهرست تنظیمات آمده است.
+        """
+        watched = (item.extra or {}).get("watched_hashtags") or []
+        parts = []
+        for tag in watched:
+            text = str(tag).lstrip("#").replace("_", " ")
+            if text.strip():
+                parts.append(_HASHTAG_SPLIT_RE.sub(" ", text))
+        return " ".join(parts)
+
     def classify(self, item: RawItem) -> Classification:
         # سقف طول متن: صفحه‌های بلند به‌طور تصادفی کلیدواژه‌های ایران و هوانوردی را کنار هم دارند
         raw_text = (item.text or "")[: self._max_match_chars]
+        signal = self._hashtag_signal(item)
+        if signal:
+            raw_text = f"{raw_text} {signal}"
         # سرصفحه‌ی «تهران-ایرنا» نباید به‌عنوان نشانه‌ی ایران شمرده شود.
         content_raw = _strip_dateline(raw_text)
         text = util.normalize(content_raw)
