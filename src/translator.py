@@ -1,9 +1,8 @@
-"""ترجمه به فارسی با گلوساری هوانوردی و اعتبارسنجی اعداد."""
-
-from __future__ import annotations
-
 import logging
+import re
 import time
+from dataclasses import dataclass
+from typing import Any
 
 import requests
 
@@ -13,20 +12,69 @@ from .models import Translation
 
 log = logging.getLogger(__name__)
 
+
+# ── مدل‌های چندریختی و cooldown ───────────────────────────────────────
+
+
+class ModelCooldown:
+    """مدیر زمان انتظار برای مدل‌های تعمیری یا مسدود شده.
+
+    کلیک Timeout توسط بذر server APP شروع می‌شود. هر مدل ۳ خطای HTTP
+    (503/429/...) ثبت می‌شود؛ اگر ۳ خطاформи شد، مدل ۵ دقیقه
+    (وای_DO 300 ثانیه) suspended می‌شود.
+    """
+
+    def __init__(self, timeout_seconds: int = 300):
+        self.timeout = timeout_seconds
+        self.start_times: dict[str, float] = {}
+        self.errors: dict[str, int] = {}
+
+    def is_active(self, model: str) -> bool:
+        """مدل در حالت cooldown است؟"""
+        if model not in self.start_times:
+            return False
+        elapsed = time.time() - self.start_times[model]
+        if elapsed > self.timeout:
+            del self.start_times[model]
+            self.errors.pop(model, None)
+            return False
+        return True
+
+    def record_error(self, model: str) -> None:
+        """یک خطا را برای مدل ثبت کن؛ پس از ۳ خطا، مدل cooldown می‌رود."""
+        count = self.errors.get(model, 0) + 1
+        self.errors[model] = count
+        if count >= 3:
+            self.start_times[model] = time.time()
+            log.warning("مدل %s پس از %d خطا در حالت cooldown قرار گرفت", model, count)
+            self.errors.pop(model, None)
+
+
+COOLDOWN = ModelCooldown()
+
+
+# ── SYSTEM_PROMPT ──────────────────────────────────────────────────
+
 SYSTEM_PROMPT = """You are a professional aviation news translator into Persian (Farsi).
 
-HARD RULES — violating any of them makes the output unusable:
-1. Translate ONLY. Never add facts, numbers, dates, names, or opinions that are not in the source.
-2. Keep these in Latin script, never transliterate: ICAO/IATA airport codes (OIIE, OIII, OIIX, IKA, THR),
-   NOTAM numbers, flight numbers, airline brand names, "NOTAM", "FIR", "UTC", "FL".
-3. Persian must be natural newsroom Persian, not literal word-by-word translation. Use "می‌" with ZWNJ.
-4. Keep every number exactly as in the source.
-5. Do not add a headline if none is given. Do not add hashtags.
-6. Output plain text only. No markdown, no commentary, no explanation.
+HARD RULES
+1. Translate ONLY the provided text. Do not add facts, opinions, or information not present.
+2. Keep every number exactly as in the source (۴۲, FL350, 250 passengers).
+3. Keep ICAO/IATA codes, NOTAM numbers, flight numbers, airline names in Latin script.
+4. Use natural Persian newsroom style. Do NOT summarize, omit, or compress any paragraph.
+5. Output plain text only. No markdown, no hashtags, no commentary.
 
-Aviation glossary (use these exact Persian equivalents when the term appears):
-{terms}
+Translate EVERY paragraph completely. If the body has multiple paragraphs, translate all of them.
+Return exactly this format:
+---
+TITLE: <Persian headline, max 10 words>
+---
+BODY: <Complete Persian translation of the entire body paragraph>
+---
 """
+
+
+# ── TRANSLATOR ───────────────────────────────────────────────────
 
 
 class Translator:
@@ -49,6 +97,9 @@ class Translator:
         self.active_provider = first.name if first else "custom"
         self.active_model = first.models[0] if first and first.models else self.model
         self.glossary = config.glossary
+        # سقف متنی که به LLM داده می‌شود (هزینه‌ی توکن)؛ متن کامل‌تر از این
+        # ترجمه نمی‌شود ولی بخش ابتدایی خبر — که منتشر می‌شود — پوشش داده می‌شود.
+        self.max_translate_chars = int(config.get("app.max_translate_chars", 4000))
         self._memory_cache: dict[str, str] = {}
         self._warned = False
 
@@ -101,9 +152,7 @@ class Translator:
         norm = util.normalize(text)
         mapping = self.glossary.get("translation_terms", {}).get("fa", {})
         lines = [
-            f"- {en} → {fa}"
-            for en, fa in mapping.items()
-            if util.normalize(en) in norm
+            f"- {en} → {fa}" for en, fa in mapping.items() if util.normalize(en) in norm
         ]
         for code in self.glossary.get("keep_latin", []):
             lines.append(f"- keep `{code}` in Latin")
@@ -274,18 +323,15 @@ class Translator:
         raw: str = "",
     ) -> Translation:
         if lang == "fa":
-            return Translation(text_fa=body or title, title_fa=title, engine="passthrough-fa")
+            return Translation(
+                text_fa=body or title, title_fa=title, engine="passthrough-fa"
+            )
 
         if not self.enabled:
             if not self._warned:
                 log.warning("هیچ کلید LLM تنظیم نشده (GEMINI_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY/LLM_API_KEY) — ترجمه غیرفعال است، متن اصلی ارسال می‌شود")
                 self._warned = True
-            return Translation(
-                text_fa=f"[ترجمه نشده — کلید LLM تنظیم نیست]\n{title}\n{body}".strip(),
-                title_fa=title,
-                engine="disabled",
-                numbers_ok=True,
-            )
+            raise RuntimeError("LLM_API_KEY تنظیم نشده — ترجمه انجام نمی‌شود")
 
         if kind == "notam":
             source_text = (
@@ -293,10 +339,12 @@ class Translator:
                 f"Raw NOTAM:\n{raw}\n\n"
                 f"Pre-decoded facts (already in Persian, do not contradict): {decoded_fa}"
             )
-            cache_key = _hash(f"notam::{title}::{raw}")
+            cache_key = util.fingerprint(f"notam::{title}::{raw}")
         else:
+            if len(body) > self.max_translate_chars:
+                body = util.truncate(body, self.max_translate_chars)
             source_text = f"HEADLINE:\n{title}\n\nBODY:\n{body}"
-            cache_key = _hash(f"{lang}::{title}::{body}")
+            cache_key = util.fingerprint(f"{lang}::{title}::{body}")
 
         cached = self._cache_get(cache_key)
         if cached:
@@ -320,12 +368,9 @@ class Translator:
             output = self._chat(instruction, system)
         except Exception as exc:  # noqa: BLE001
             log.error("%s", exc)
-            return Translation(
-                text_fa=f"[خطای ترجمه — متن اصلی]\n{title}\n{body}".strip(),
-                title_fa=title,
-                engine="failed",
-                numbers_ok=False,
-            )
+            # ⚠️ translte_item NEVER returns raw English.
+            # Pipeline will catch RuntimeError → delete item and retry.
+            raise RuntimeError(f"ترجمة ناموفق بود: {exc}") from exc
 
         if "---" in output:
             head, body_fa = output.split("---", 1)
@@ -346,6 +391,11 @@ class Translator:
             else f"{self.active_provider}/{self.active_model}"
         )
         return Translation(text_fa=body_fa, title_fa=head, engine=engine, numbers_ok=ok)
+        return Translation(text_fa=body_fa, title_fa=head, engine=engine, numbers_ok=ok)
+
+    def answer_chat(self, system_prompt: str, user_text: str) -> str:
+        """سازگاری: پاسخ چت از همان زنجیره‌ی یکپارچه‌ی سرویس‌های رایگان."""
+        return self._chat(user_text, system_prompt)
 
 
 def _hash(text: str) -> str:

@@ -18,7 +18,7 @@ class RawItem:
     url: str
     lang: str = "en"
     country: str = "INTL"
-    kind: str = "rss"          # rss | notam | telegram | x
+    kind: str = "rss"  # rss | notam | telegram | x | instagram
     published_at: datetime | None = None
     extra: dict = field(default_factory=dict)
 
@@ -46,6 +46,7 @@ class Classification:
     # موضوع اصلی است یا فقط مرتبطِ حاشیه‌ای؟ فقط موضوع اصلی برای کاربر ارسال
     # می‌شود؛ بقیه در دیتابیس ثبت می‌شوند (برای /last و خوشه‌بندی) ولی پوش نمی‌شوند.
     publishable: bool = False
+    confidence_score: float = 0.0
 
     @property
     def entity_key(self) -> str:
