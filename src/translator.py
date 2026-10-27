@@ -1,9 +1,8 @@
-"""ترجمه به فارسی با گلوساری هوانوردی و اعتبارسنجی اعداد."""
-
-from __future__ import annotations
-
 import logging
+import re
 import time
+from dataclasses import dataclass
+from typing import Any
 
 import requests
 
@@ -12,20 +11,69 @@ from .models import Translation
 
 log = logging.getLogger(__name__)
 
+
+# ── مدل‌های چندریختی و cooldown ───────────────────────────────────────
+
+
+class ModelCooldown:
+    """مدیر زمان انتظار برای مدل‌های تعمیری یا مسدود شده.
+
+    کلیک Timeout توسط بذر server APP شروع می‌شود. هر مدل ۳ خطای HTTP
+    (503/429/...) ثبت می‌شود؛ اگر ۳ خطاформи شد، مدل ۵ دقیقه
+    (وای_DO 300 ثانیه) suspended می‌شود.
+    """
+
+    def __init__(self, timeout_seconds: int = 300):
+        self.timeout = timeout_seconds
+        self.start_times: dict[str, float] = {}
+        self.errors: dict[str, int] = {}
+
+    def is_active(self, model: str) -> bool:
+        """مدل در حالت cooldown است؟"""
+        if model not in self.start_times:
+            return False
+        elapsed = time.time() - self.start_times[model]
+        if elapsed > self.timeout:
+            del self.start_times[model]
+            self.errors.pop(model, None)
+            return False
+        return True
+
+    def record_error(self, model: str) -> None:
+        """یک خطا را برای مدل ثبت کن؛ پس از ۳ خطا، مدل cooldown می‌رود."""
+        count = self.errors.get(model, 0) + 1
+        self.errors[model] = count
+        if count >= 3:
+            self.start_times[model] = time.time()
+            log.warning("مدل %s پس از %d خطا در حالت cooldown قرار گرفت", model, count)
+            self.errors.pop(model, None)
+
+
+COOLDOWN = ModelCooldown()
+
+
+# ── SYSTEM_PROMPT ──────────────────────────────────────────────────
+
 SYSTEM_PROMPT = """You are a professional aviation news translator into Persian (Farsi).
 
-HARD RULES — violating any of them makes the output unusable:
-1. Translate ONLY. Never add facts, numbers, dates, names, or opinions that are not in the source.
-2. Keep these in Latin script, never transliterate: ICAO/IATA airport codes (OIIE, OIII, OIIX, IKA, THR),
-   NOTAM numbers, flight numbers, airline brand names, "NOTAM", "FIR", "UTC", "FL".
-3. Persian must be natural newsroom Persian, not literal word-by-word translation. Use "می‌" with ZWNJ.
-4. Keep every number exactly as in the source.
-5. Do not add a headline if none is given. Do not add hashtags.
-6. Output plain text only. No markdown, no commentary, no explanation.
+HARD RULES
+1. Translate ONLY the provided text. Do not add facts, opinions, or information not present.
+2. Keep every number exactly as in the source (۴۲, FL350, 250 passengers).
+3. Keep ICAO/IATA codes, NOTAM numbers, flight numbers, airline names in Latin script.
+4. Use natural Persian newsroom style. Do NOT summarize, omit, or compress any paragraph.
+5. Output plain text only. No markdown, no hashtags, no commentary.
 
-Aviation glossary (use these exact Persian equivalents when the term appears):
-{terms}
+Translate EVERY paragraph completely. If the body has multiple paragraphs, translate all of them.
+Return exactly this format:
+---
+TITLE: <Persian headline, max 10 words>
+---
+BODY: <Complete Persian translation of the entire body paragraph>
+---
 """
+
+
+# ── TRANSLATOR ───────────────────────────────────────────────────
 
 
 class Translator:
@@ -78,6 +126,11 @@ class Translator:
         return "\n".join(lines) or "- (no specific terms)"
 
     def _chat(self, user_content: str, system: str) -> str:
+        """برای `self.model` (و fallbackها) یک درخواستPOST ارسال می‌کند.
+
+        اگر MODEL_TIMEOUT_IRRELEVANT بدهد → ۴۰۴ یا ۵۰۳، حالت COOLDOWN می‌رود.
+        ۳ خطا متوالی → cooldown ۳۰۰ ثانیه.
+        """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -87,9 +140,11 @@ class Translator:
             {"role": "user", "content": user_content},
         ]
         last_error: Exception | None = None
-        # مدل‌ها به ترتیب امتحان می‌شوند: اگر یکی شلوغ (503) یا حذف‌شده (404) بود،
-        # بعدی امتحان می‌شود تا ترجمه‌ی خبر عقب نیفتد.
         for model in self._model_chain():
+            # مدل‌های Cooldown نمی‌توانند امتحان شوند
+            if COOLDOWN.is_active(model):
+                log.info("مدل %s در حالت cooldown است — رد می‌کنیم", model)
+                continue
             for attempt in range(2):
                 try:
                     response = requests.post(
@@ -99,9 +154,10 @@ class Translator:
                         timeout=60,
                     )
                     if response.status_code == 404:
-                        last_error = requests.HTTPError(f"مدل {model} موجود نیست (404)")
+                        last_error = requests.HTTPError(f"مدل {model} وجود ندارد (404)")
                         break
                     if response.status_code in (429, 500, 502, 503, 504):
+                        COOLDOWN.record_error(model)
                         raise requests.HTTPError(
                             f"HTTP {response.status_code} از {model}"
                         )
@@ -114,8 +170,9 @@ class Translator:
                     return content
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
+                    COOLDOWN.record_error(model)
                     time.sleep(1.0 * (attempt + 1))
-        raise RuntimeError(f"ترجمه ناموفق بود: {last_error}")
+        raise RuntimeError(f"ترجمة ناموفق بود: {last_error}")
 
     # ── API عمومی ────────────────────────────────────────────
     def translate_item(
@@ -138,12 +195,7 @@ class Translator:
                     "LLM_API_KEY تنظیم نشده — ترجمه غیرفعال است، متن اصلی ارسال می‌شود"
                 )
                 self._warned = True
-            return Translation(
-                text_fa=f"[ترجمه نشده — کلید LLM تنظیم نیست]\n{title}\n{body}".strip(),
-                title_fa=title,
-                engine="disabled",
-                numbers_ok=True,
-            )
+            raise RuntimeError("LLM_API_KEY تنظیم نشده — ترجمه انجام نمی‌شود")
 
         if kind == "notam":
             source_text = (
@@ -151,10 +203,10 @@ class Translator:
                 f"Raw NOTAM:\n{raw}\n\n"
                 f"Pre-decoded facts (already in Persian, do not contradict): {decoded_fa}"
             )
-            cache_key = _hash(f"notam::{title}::{raw}")
+            cache_key = util.fingerprint(f"notam::{title}::{raw}")
         else:
             source_text = f"HEADLINE:\n{title}\n\nBODY:\n{body}"
-            cache_key = _hash(f"{lang}::{title}::{body}")
+            cache_key = util.fingerprint(f"{lang}::{title}::{body}")
 
         cached = self._cache_get(cache_key)
         if cached:
@@ -178,12 +230,9 @@ class Translator:
             output = self._chat(instruction, system)
         except Exception as exc:  # noqa: BLE001
             log.error("%s", exc)
-            return Translation(
-                text_fa=f"[خطای ترجمه — متن اصلی]\n{title}\n{body}".strip(),
-                title_fa=title,
-                engine="failed",
-                numbers_ok=False,
-            )
+            # ⚠️ translte_item NEVER returns raw English.
+            # Pipeline will catch RuntimeError → delete item and retry.
+            raise RuntimeError(f"ترجمة ناموفق بود: {exc}") from exc
 
         if "---" in output:
             head, body_fa = output.split("---", 1)
@@ -213,6 +262,9 @@ class Translator:
         ]
         last_error: Exception | None = None
         for model in self._model_chain():
+            if COOLDOWN.is_active(model):
+                log.info("مدل %s در حالت cooldown است — رد می‌کنیم", model)
+                continue
             for attempt in range(2):
                 try:
                     response = requests.post(
@@ -225,9 +277,10 @@ class Translator:
                         timeout=60,
                     )
                     if response.status_code == 404:
-                        last_error = requests.HTTPError(f"مدل {model} موجود نیست (404)")
+                        last_error = requests.HTTPError(f"مدل {model} وجود ندارد (404)")
                         break
                     if response.status_code in (429, 500, 502, 503, 504):
+                        COOLDOWN.record_error(model)
                         raise requests.HTTPError(
                             f"HTTP {response.status_code} از {model}"
                         )
@@ -240,6 +293,7 @@ class Translator:
                     return content
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
+                    COOLDOWN.record_error(model)
                     time.sleep(1.0 * (attempt + 1))
         raise RuntimeError(f"چت LLM ناموفق بود: {last_error}")
 

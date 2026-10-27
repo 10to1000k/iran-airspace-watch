@@ -89,14 +89,25 @@ class Pipeline:
 
     # ── رخداد تازه ───────────────────────────────────────────
     def _create_event(self, item: RawItem, fp: str, cls, tokens: set[str]) -> str:
-        translation = self.translator.translate_item(
-            title=item.title,
-            body=item.body,
-            lang=item.lang,
-            kind=item.kind,
-            decoded_fa=item.extra.get("decoded_fa", ""),
-            raw=item.extra.get("raw_notam", ""),
-        )
+        # ⚠️ translate_item never returns raw English. If it raises RuntimeError
+        # (e.g. model down, all fallbacks failed), delete the item and retry later.
+        try:
+            translation = self.translator.translate_item(
+                title=item.title,
+                body=item.body,
+                lang=item.lang,
+                kind=item.kind,
+                decoded_fa=item.extra.get("decoded_fa", ""),
+                raw=item.extra.get("raw_notam", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "ترجمة ناموفق — آیتم حذف شد و pipelined retry می‌شود: %s",
+                exc,
+            )
+            # آیتم از دیتابیس حذف می‌شود تا چرخه بعدی دوباره تلاش کند.
+            self.db.delete_item(item.source_id, fp)
+            return "translation-failed"
 
         confidence = "official" if item.tier == 0 else "single"
         event_id, created = self.db.create_event(
