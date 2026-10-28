@@ -1,0 +1,146 @@
+# Optional social-to-RSS bridge, deployed into the existing OpenShift namespace.
+# Internal ClusterIP only: do not expose an OpenShift Route or public Service.
+# Credentials are supplied via the separate social-feed-secrets Secret.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social-feed-redis
+  labels:
+    app: social-feed-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: social-feed-redis
+  template:
+    metadata:
+      labels:
+        app: social-feed-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          # Redis is only a cache; it is intentionally ephemeral and needs no PVC.
+          args: ["redis-server", "--save", "", "--appendonly", "no", "--dir", "/tmp"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-feed-redis
+  labels:
+    app: social-feed-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: social-feed-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social-feed-hub
+  labels:
+    app: social-feed-hub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: social-feed-hub
+  template:
+    metadata:
+      labels:
+        app: social-feed-hub
+    spec:
+      containers:
+        - name: rsshub
+          image: diygod/rsshub:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 1200
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: CACHE_TYPE
+              value: redis
+            - name: REDIS_URL
+              value: redis://social-feed-redis:6379/
+          envFrom:
+            - secretRef:
+                name: social-feed-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-feed-hub
+  labels:
+    app: social-feed-hub
+spec:
+  type: ClusterIP
+  selector:
+    app: social-feed-hub
+  ports:
+    - name: http
+      port: 1200
+      targetPort: http
