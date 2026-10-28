@@ -677,7 +677,11 @@ class TranslatorTests(unittest.TestCase):
 
         from src.translator import Translator
 
-        with mock.patch.dict("os.environ", mock_env, clear=False):
+        # LLM_* واقعیِ .env خنثی می‌شود تا زنجیره در هر محیطی یکسان باشد؛
+        # (در محیط واقعی custom در انتهای زنجیره می‌آید و رفتار درست همین است)
+        env = {"LLM_API_KEY": "", "LLM_FALLBACK_MODELS": ""}
+        env.update(mock_env)
+        with mock.patch.dict("os.environ", env, clear=False):
             return Translator(load_config(), db=None)
 
     def test_free_providers_are_ordered_and_skip_missing_keys(self):
