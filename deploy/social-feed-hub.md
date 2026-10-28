@@ -48,7 +48,7 @@ oc exec $pod -- python -c "import urllib.request; u='http://social-feed-hub:1200
 
 Try one at a time from `config/sources.yaml`. All proposed social RSS rows are currently `enabled: false` on purpose. Enable only routes that return a valid RSS/Atom document and relevant recent posts; then build and roll out the bot. If the response is an error, empty, HTML login page, or rate-limit response, leave that row disabled.
 
-Initial candidate feeds are listed in `config/sources.yaml` for Anadolu, Mehr, IRNA, TASS, Al Jazeera English, and Iran International (X); the initial Instagram list is Anadolu, Mehr, IRNA, TASS, and Al Jazeera English. ISNA is not enabled because the English account identity still needs first-party confirmation. RSSHub's currently documented routes are `/twitter/user/:handle` and `/instagram/user/:handle`; upstream route changes may require updating these paths.
+The live-tested Anadolu X and Instagram routes are enabled as a pilot in `config/sources.yaml`. Other candidate feeds for Mehr, IRNA, TASS, Al Jazeera English, and Iran International (X), and Mehr, IRNA, TASS, and Al Jazeera English (Instagram), remain disabled until individually tested. ISNA is not enabled because the English account identity still needs first-party confirmation. RSSHub's currently documented routes are `/twitter/user/:handle` and `/instagram/user/:handle`; upstream route changes may require updating these paths.
 
 ## 4. Monitor and roll back
 
