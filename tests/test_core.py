@@ -91,6 +91,22 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.category, "airspace")
         self.assertEqual(result.severity, "critical")
 
+    def test_robbery_band_is_not_airport_news(self):
+        """«باند سارقان» به معنی باند فرودگاه نیست و نباید خبر فرودگاهی شود."""
+        result = self.classifier.classify(
+            self.item(
+                "انهدام باند سارقان به عنف در صوفیان",
+                "شبستر- فرمانده انتظامی شهرستان شبستر از شناسایی و دستگیری اعضای یک "
+                "باند چهار نفره سارقان به عنف در بخش صوفیان و کشف خودروی مسروقه خبر داد. "
+                "در پی وقوع یک فقره سرقت به عنف خودرو با استفاده از سلاح سرد در محور تبریز "
+                "به صوفیان، کارآگاهان پلیس اقدام کردند.",
+                lang="fa",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+        self.assertFalse(result.publishable)
+
     def test_relevant_airline_route(self):
         result = self.classifier.classify(
             self.item("Turkish Airlines suspends flights to Iran", "", country="TR")
