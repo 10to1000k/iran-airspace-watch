@@ -501,6 +501,23 @@ class CollectorTests(unittest.TestCase):
             )
         )
 
+    def test_social_hub_failure_is_cooled_down_instead_of_retried_each_cycle(self):
+        from unittest.mock import patch
+
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        source = {
+            "id": "social_ig_tag_test",
+            "url": "http://social-feed-hub:1200/instagram/tags/Test",
+        }
+        with patch.object(collector, "_fetch", side_effect=RuntimeError("upstream 503")) as fetch:
+            self.assertEqual(collector.poll([source]), [])
+            fetch.assert_called_once_with(source)
+        with patch.object(collector, "_fetch") as fetch:
+            self.assertEqual(collector.poll([source]), [])
+            fetch.assert_not_called()
+
     def test_build_jobs_skips_disabled_collectors(self):
         from src.airlines import AirlineIndex
         from src.collectors import build_jobs

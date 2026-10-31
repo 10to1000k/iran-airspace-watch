@@ -20,6 +20,10 @@ poll:
   # فیدهای هشتگی جداگانه و سریع‌تر از منابع خبری عمومی پایش شوند.
   social_hashtag_seconds: 30
   rss_workers: 6
+  # مسیرهای RSSHub را با concurrency پایین‌تر می‌خوانیم تا موج درخواست نسازند.
+  social_rss_workers: 2
+  # خطای upstream در مسیرهای اجتماعی تا ۱۵ دقیقه دوباره درخواست نمی‌شود.
+  social_failure_cooldown_seconds: 900
   notam_seconds: 60
   x_seconds: 90
   telegram_queue_seconds: 10
