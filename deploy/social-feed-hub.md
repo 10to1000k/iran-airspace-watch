@@ -46,15 +46,13 @@ $pod = oc get pod -l app=airwatch -o jsonpath='{.items[0].metadata.name}'
 oc exec $pod -- python -c "import urllib.request; u='http://social-feed-hub:1200/twitter/user/anadoluagency'; r=urllib.request.urlopen(u,timeout=20); print(r.status, r.headers.get('Content-Type')); print(r.read(500).decode('utf-8','replace'))"
 ```
 
-Try one at a time from `config/sources.yaml`. All proposed social RSS rows are currently `enabled: false` on purpose. Enable only routes that return a valid RSS/Atom document and relevant recent posts; then build and roll out the bot. If the response is an error, empty, HTML login page, or rate-limit response, leave that row disabled.
-
-The live-tested Anadolu X and Instagram routes are enabled as a pilot in `config/sources.yaml`. Other candidate feeds for Mehr, IRNA, TASS, Al Jazeera English, and Iran International (X), and Mehr, IRNA, TASS, and Al Jazeera English (Instagram), remain disabled until individually tested. ISNA is not enabled because the English account identity still needs first-party confirmation. RSSHub's currently documented routes are `/twitter/user/:handle` and `/instagram/user/:handle`; upstream route changes may require updating these paths.
+Test each route from the bot pod. The Anadolu X and Instagram profile feeds are the live-tested profile pilot; other candidate profile feeds remain disabled until individually validated. RSSHub's profile routes are `/twitter/user/:handle` and `/instagram/user/:handle`; upstream changes may require updating these paths.
 
 ## Hashtag-feed pilot
 
-The project defines a broad watchlist for Iranian airports (including Tehran, Mashhad, Shiraz, Isfahan, Tabriz, Kish, Bandar Abbas and Ahvaz), plus general Iran-airport and Persian variants. There are 25 distinct RSSHub hashtag terms (50 X/Instagram candidate routes) in `config/sources.yaml`; all intentionally remain `enabled: false` until their exact paths return valid feeds in the live cluster. Each route carries `airport_hashtag_feed: true`: every returned item is treated as publishable and bypasses keyword thresholds and topic-title vetoes, as requested. This can include noisy or unrelated posts using a watched hashtag.
+The project defines a broad watchlist for Iranian airports (including Tehran, Mashhad, Shiraz, Isfahan, Tabriz, Kish, Bandar Abbas and Ahvaz), plus general Iran-airport and Persian variants. There are 25 distinct RSSHub hashtag terms (50 X/Instagram routes) in `config/sources.yaml`; they are enabled at the user's request. The Instagram `IranAirspace` route returned HTTP 200 with 33 RSS items. X could not yet be tested because `oc exec` repeatedly lost DNS/TLS connectivity to the OpenShift API; this is not evidence that the X route itself failed. The collector isolates per-feed errors, so a broken X route should not stop other RSS feeds, but monitor its logs. Each route carries `airport_hashtag_feed: true`: every returned item is publishable and bypasses keyword thresholds and topic-title vetoes. This may send noisy or unrelated posts that reuse a watched hashtag.
 
-The watchlist is capped at 30 unique terms to stay within Meta's documented 30 unique hashtag searches per rolling 7 days. Test a representative tag per platform from the bot pod before enabling any rows. For example:
+The watchlist is capped at 30 unique terms; these 25 Instagram searches are under Meta's documented 30 unique hashtag searches per rolling 7 days. If Instagram returns 429 or a login/error page, disable the affected Instagram hashtag rows and allow cooldown. To re-test routes from the bot pod:
 
 ```powershell
 $pod = oc get pod -l app=airwatch -o jsonpath='{.items[0].metadata.name}'

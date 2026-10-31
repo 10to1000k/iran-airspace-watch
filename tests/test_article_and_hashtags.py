@@ -394,14 +394,13 @@ class HashtagMonitoringTests(unittest.TestCase):
         self.assertTrue(result.publishable)
         self.assertEqual(result.category, "airspace")
 
-    def test_social_hashtag_feeds_stay_disabled_until_route_validation(self):
+    def test_social_hashtag_feeds_are_enabled_with_publish_all_metadata(self):
         config = load_config()
         sources = config.sources.get("sources", [])
         hashtag_feeds = [s for s in sources if s["id"].startswith("social_") and "_tag_" in s["id"]]
-        self.assertTrue(hashtag_feeds)
-        self.assertTrue(all(not s.get("enabled", True) for s in hashtag_feeds))
+        self.assertEqual(len(hashtag_feeds), 50)
+        self.assertTrue(all(s.get("enabled") for s in hashtag_feeds))
         self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
-        self.assertGreaterEqual(len(hashtag_feeds), 50)
         self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
 
     def test_airport_hashtag_feed_bypasses_keyword_thresholds_and_vetoes(self):
