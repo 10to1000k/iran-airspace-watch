@@ -86,6 +86,15 @@ hashtags:
     - OIIX
     - IranAir
     - MahanAir
+    - IranFlights
+    - FlightsToIran
+    - ImamKhomeiniAirport
+    - MehrabadAirport
+    - پرواز_تهران
+    - پرواز_به_ایران
+    - فرودگاه_امام_خمینی
+    - فرودگاه_مهرآباد
+    - حریم_هوایی_ایران
   instagram:
     # فعال‌سازی فقط با ENABLE_INSTAGRAM=true (+ اختیاری: INSTAGRAM_USERNAME/PASSWORD)
     # ⚠️ اسکرپینگ اینستاگرام خلاف شرایط سرویس است؛ مسئولیت با فعال‌کننده است.
@@ -127,8 +136,8 @@ relevance:
   keywords:
     # فقط نام‌ها و مکان‌های ایران. اصطلاحات هوانوردی جای دیگری هستند؛
     # وگرنه هر خبر «حریم هوایی» در دنیا به ایران وصل می‌شود.
-    fa: [ایران, ایرانی, تهران, مهرآباد, "امام خمینی"]
-    en: [iran, iranian, tehran, mehrabad, "imam khomeini", "fir tehran", "tehran fir"]
+    fa: [ایران, ایرانی, تهران, مهرآباد, "امام خمینی", "فرودگاه تهران", "فرودگاه مهرآباد", "فرودگاه امام خمینی", "فرودگاه بین‌المللی امام خمینی", "پرواز تهران", "پرواز به تهران", "پرواز از تهران", "پرواز به ایران", "پرواز از ایران"]
+    en: [iran, iranian, tehran, mehrabad, "imam khomeini", "fir tehran", "tehran fir", "tehran airport", "mehrabad airport", "imam khomeini airport", "imam khomeini international airport", "flights to iran", "flights from iran", "flights to tehran", "flights from tehran"]
     tr: [iran, tahran, mehrabad, "imam humeyni"]
     ru: [иран, тегеран, мехрабад, "имам хомейни"]
     ar: [إيران, ايران, طهران, مهرآباد, "الإمام الخميني"]
@@ -200,6 +209,15 @@ relevance:
     - "لغو پرواز"
     - "لغو پروازها"
     - "تأخیر پرواز"
+    - "پرواز به تهران"
+    - "پرواز از تهران"
+    - "پرواز به ایران"
+    - "پرواز از ایران"
+    - "پروازهای تهران"
+    - "flights to Iran"
+    - "flights from Iran"
+    - "flights to Tehran"
+    - "flights from Tehran"
     - havayolu
     - havalimanı
     - "hava sahası"

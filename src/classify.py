@@ -146,6 +146,24 @@ class Classifier:
             tag in text for tag in self._hashtags_aviation
         )
 
+    def _watched_hashtag_pair(self, item: RawItem) -> bool:
+        """تگ مشخص‌شده در فید RSSHub هشتگی، جایگزین هشتگِ حذف‌شده از RSS شود."""
+        watched = {
+            util.normalize(str(tag).lstrip("#").replace("_", " "))
+            for tag in ((item.extra or {}).get("watched_hashtags") or [])
+        }
+        if not watched:
+            return False
+        iran_tags = {
+            util.normalize(str(tag).lstrip("#").replace("_", " "))
+            for tag in self._hashtags_iran
+        }
+        aviation_tags = {
+            util.normalize(str(tag).lstrip("#").replace("_", " "))
+            for tag in self._hashtags_aviation
+        }
+        return bool(watched & iran_tags) and bool(watched & aviation_tags)
+
     @staticmethod
     def _hit(text: str, keywords: list[str]) -> bool:
         return any(_contains(text, kw) for kw in keywords)
@@ -271,7 +289,8 @@ class Classifier:
         # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
         airlines = self.airlines.match(raw_text)
 
-        if not self._is_relevant(text, airports, airlines) and not self._hashtag_pair(text):
+        hashtag_pair = self._hashtag_pair(text) or self._watched_hashtag_pair(item)
+        if not self._is_relevant(text, airports, airlines) and not hashtag_pair:
             return Classification(relevant=False, matched=[])
 
         scores = {
@@ -354,7 +373,7 @@ class Classifier:
             severity=severity,
             airports=airports,
             airlines=airlines,
-            hashtag_pair=self._hashtag_pair(text),
+            hashtag_pair=hashtag_pair,
         )
 
         return Classification(

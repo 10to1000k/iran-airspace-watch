@@ -50,6 +50,20 @@ Try one at a time from `config/sources.yaml`. All proposed social RSS rows are c
 
 The live-tested Anadolu X and Instagram routes are enabled as a pilot in `config/sources.yaml`. Other candidate feeds for Mehr, IRNA, TASS, Al Jazeera English, and Iran International (X), and Mehr, IRNA, TASS, and Al Jazeera English (Instagram), remain disabled until individually tested. ISNA is not enabled because the English account identity still needs first-party confirmation. RSSHub's currently documented routes are `/twitter/user/:handle` and `/instagram/user/:handle`; upstream route changes may require updating these paths.
 
+## Hashtag-feed pilot
+
+The project defines monitored terms for Tehran airports, Iran flights and Persian/English variants. Candidate RSSHub hashtag routes are listed in `config/sources.yaml` but intentionally remain `enabled: false` until their exact paths return valid feeds in the live cluster. They carry a `watched_hashtags` marker so a matched platform tag is preserved for the relevance filter and included in the Telegram post.
+
+The pilot uses at most 11 distinct Instagram tags, below Meta's documented 30 unique hashtag searches per rolling 7 days. Test one known tag per platform from the bot pod before enabling the rows. For example:
+
+```powershell
+$pod = oc get pod -l app=airwatch -o jsonpath='{.items[0].metadata.name}'
+oc exec $pod -- python -c "import requests,feedparser; u='http://social-feed-hub:1200/twitter/keyword/%23IranAirspace'; r=requests.get(u,timeout=30); f=feedparser.parse(r.content); print('HTTP',r.status_code,'items',len(f.entries)); print(f.feed.get('title'))"
+oc exec $pod -- python -c "import requests,feedparser; u='http://social-feed-hub:1200/instagram/tags/IranAirspace'; r=requests.get(u,timeout=30); f=feedparser.parse(r.content); print('HTTP',r.status_code,'items',len(f.entries)); print(f.feed.get('title'))"
+```
+
+Only enable hashtag source rows that return HTTP 200 and parse as RSS. If Instagram gives 429, stop retrying and let the cooldown pass; the rows stay off until validated. The `watchlist` also feeds the optional native X/Instagram collectors, but these remain disabled unless their own `ENABLE_X` / `ENABLE_INSTAGRAM` flags are explicitly enabled.
+
 ## 4. Monitor and roll back
 
 ```powershell
