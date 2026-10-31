@@ -45,6 +45,12 @@ class RssCollector:
         self.per_feed = int(config.get("poll.max_items_per_feed", 15))
         self.max_body_chars = int(config.get("poll.max_feed_body_chars", 1200))
         self.max_workers = max(1, int(config.get("poll.rss_workers", 6)))
+        self.social_workers = max(1, int(config.get("poll.social_rss_workers", 2)))
+        self.social_failure_cooldown = max(
+            0, int(config.get("poll.social_failure_cooldown_seconds", 900))
+        )
+        self._social_retry_after: dict[str, float] = {}
+        self._social_retry_lock = threading.Lock()
         self.skip_url_parts = [
             part.lower() for part in (config.get("poll.skip_url_parts", []) or [])
         ]
@@ -67,26 +73,59 @@ class RssCollector:
         if not sources:
             return []
 
+        # RSSHub hashtag routes can fan out into dozens of upstream requests.
+        # On upstream 429/503, put only those routes on a cooldown instead of
+        # retrying every route on every 30-second scheduler tick.
+        now = time.monotonic()
+        ready_sources = []
+        cooled_down = 0
+        with self._social_retry_lock:
+            for source in sources:
+                if self._is_social_hub_source(source):
+                    retry_after = self._social_retry_after.get(source["id"], 0)
+                    if retry_after > now:
+                        cooled_down += 1
+                        continue
+                ready_sources.append(source)
+        if cooled_down:
+            log.info("RSSHub: %d مسیر در cooldown هستند", cooled_down)
+        if not ready_sources:
+            return []
+
         items: list[RawItem] = []
-        workers = min(self.max_workers, len(sources))
+        is_social_batch = all(self._is_social_hub_source(s) for s in ready_sources)
+        worker_limit = self.social_workers if is_social_batch else self.max_workers
+        workers = min(worker_limit, len(ready_sources))
         with ThreadPoolExecutor(
             max_workers=workers, thread_name_prefix="rss-worker"
         ) as pool:
             future_map = {
-                pool.submit(self._fetch, source): source for source in sources
+                pool.submit(self._fetch, source): source for source in ready_sources
             }
             for future in as_completed(future_map):
                 source = future_map[future]
                 try:
                     fetched = future.result()
                     items.extend(fetched)
+                    if self._is_social_hub_source(source):
+                        with self._social_retry_lock:
+                            self._social_retry_after.pop(source["id"], None)
                     if self.db:
                         self.db.mark_source_ok(source["id"])
                 except Exception as exc:  # noqa: BLE001
                     log.warning("فید %s خوانده نشد: %s", source.get("id"), exc)
+                    if self._is_social_hub_source(source) and self.social_failure_cooldown:
+                        with self._social_retry_lock:
+                            self._social_retry_after[source["id"]] = (
+                                time.monotonic() + self.social_failure_cooldown
+                            )
                     if self.db:
                         self.db.mark_source_error(source["id"], str(exc))
         return items
+
+    @staticmethod
+    def _is_social_hub_source(source: dict) -> bool:
+        return urlparse(str(source.get("url", ""))).hostname == "social-feed-hub"
 
     def _read_bounded(
         self, url: str, timeout: tuple[float, float] = (8.0, 18.0)
