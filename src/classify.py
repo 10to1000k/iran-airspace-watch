@@ -26,9 +26,6 @@ _PERSIAN_FALSE_POSITIVES = [
     "آب‌وهوایی",
 ]
 
-# حداقل امتیاز لازم برای tether relevance (0 تا 1)
-_MIN_RELEVANCE_SCORE = 0.35
-
 # «تهران-ایرنا» و «TEHRAN (IRNA)» ابتدای خبر، محل انتشار را نشان می‌دهند
 # نه محل رخداد. اگر حذف نشوند، خبر فرودگاه عربستان «ایران‌محور» می‌شود.
 _DATELINE_RE = re.compile(
@@ -146,6 +143,24 @@ class Classifier:
             tag in text for tag in self._hashtags_aviation
         )
 
+    def _watched_hashtag_pair(self, item: RawItem) -> bool:
+        """تگ مشخص‌شده در فید RSSHub هشتگی، جایگزین هشتگِ حذف‌شده از RSS شود."""
+        watched = {
+            util.normalize(str(tag).lstrip("#").replace("_", " "))
+            for tag in ((item.extra or {}).get("watched_hashtags") or [])
+        }
+        if not watched:
+            return False
+        iran_tags = {
+            util.normalize(str(tag).lstrip("#").replace("_", " "))
+            for tag in self._hashtags_iran
+        }
+        aviation_tags = {
+            util.normalize(str(tag).lstrip("#").replace("_", " "))
+            for tag in self._hashtags_aviation
+        }
+        return bool(watched & iran_tags) and bool(watched & aviation_tags)
+
     @staticmethod
     def _hit(text: str, keywords: list[str]) -> bool:
         return any(_contains(text, kw) for kw in keywords)
@@ -191,8 +206,10 @@ class Classifier:
             # کد فرودگاه به‌تنهایی کافی نیست؛ باید یک نشانه‌ی عملیاتی هم باشد.
             if operational:
                 return True
+            if non_operational and not airspace_signal:
+                return False
             weak_hits = sum(1 for kw in self._aviation if _contains(norm, kw))
-            return weak_hits >= 2
+            return weak_hits >= 1
 
         # ── ۲. ایرلاین ایرانی ──
         iranian_airlines = [a for a in airlines if self.airlines.is_iranian(a)]
@@ -236,9 +253,12 @@ class Classifier:
         if operational:
             return True
 
-        # ── ۸. کلمات ضعیف هوانوردی (باید حداقل دو مورد باشد) ──
+        # ── ۸. آستانه‌ی کلیدواژه‌ی هوانوردی: یک مورد کافی است ──
+        # تیترهای غیرعملیاتیِ نظامی/جنایی همچنان توسط vetoهای بالاتر محافظت می‌شوند.
+        if non_operational and not airspace_signal:
+            return False
         weak_hits = sum(1 for kw in self._aviation if _contains(norm, kw))
-        return weak_hits >= 2
+        return weak_hits >= 1
 
     # ── اصلی ─────────────────────────────────────────────────
     def _hashtag_signal(self, item: RawItem) -> str:
@@ -271,7 +291,21 @@ class Classifier:
         # حروف بزرگ مثل THY، PIA، KLM، IRA و IRM درست تشخیص داده شوند.
         airlines = self.airlines.match(raw_text)
 
-        if not self._is_relevant(text, airports, airlines) and not self._hashtag_pair(text):
+        airport_hashtag_feed = bool((item.extra or {}).get("airport_hashtag_feed"))
+        hashtag_pair = self._hashtag_pair(text) or self._watched_hashtag_pair(item)
+        non_aviation_sports_title = (
+            self._hit(util.normalize(item.title or ""), self._negative_title)
+            and not airports
+            and not airlines
+            and not self._hit(text, self._airspace_signal)
+        )
+        if not airport_hashtag_feed and non_aviation_sports_title:
+            return Classification(relevant=False, matched=[])
+        if (
+            not self._is_relevant(text, airports, airlines)
+            and not hashtag_pair
+            and not airport_hashtag_feed
+        ):
             return Classification(relevant=False, matched=[])
 
         scores = {
@@ -282,6 +316,9 @@ class Classifier:
             scores, key=lambda name: (scores[name], -_CATEGORY_PRIORITY.index(name))
         )
         category = best if scores[best] > 0 else "context"
+        if airport_hashtag_feed and category == "context":
+            category = "airport"
+            scores["airport"] = max(scores["airport"], 1)
 
         matched = [kw for kw in self._critical if _contains(text, kw)]
         if matched:
@@ -300,6 +337,7 @@ class Classifier:
             bool(airports)
             or any(self.airlines.is_iranian(a) for a in airlines)
             or self._hit(text, self._relevance)
+            or airport_hashtag_feed
         )
         if iran_signal:
             countries.add("IR")
@@ -354,7 +392,8 @@ class Classifier:
             severity=severity,
             airports=airports,
             airlines=airlines,
-            hashtag_pair=self._hashtag_pair(text),
+            hashtag_pair=hashtag_pair,
+            airport_hashtag_feed=airport_hashtag_feed,
         )
 
         return Classification(
@@ -378,6 +417,7 @@ class Classifier:
         airports: list[str],
         airlines: list[str],
         hashtag_pair: bool,
+        airport_hashtag_feed: bool = False,
     ) -> bool:
         """آیا خبر «موضوع اصلی» است و باید همان لحظه برای کاربر برود؟
 
@@ -404,8 +444,12 @@ class Classifier:
         strong_body = self._distinct_hits(body_text, self._strong)
         signal_body = self._distinct_hits(body_text, self._airspace_signal)
 
+        # هر آیتم از feed اختصاصیِ هشتگ فرودگاهی، به درخواست کاربر ارسال می‌شود؛
+        # این مسیر عمداً از thresholdها و vetoهای متنی مستثناست.
         publishable = False
-        if airports or any(self.airlines.is_iranian(name) for name in airlines):
+        if airport_hashtag_feed:
+            publishable = True
+        elif airports or any(self.airlines.is_iranian(name) for name in airlines):
             publishable = True
         elif hashtag_pair:
             publishable = True
@@ -415,7 +459,7 @@ class Classifier:
             and self._hit(util.normalize(item.text or ""), self._airspace_signal)
         ):
             publishable = True
-        elif iran_title and (strong_title or airlines_title or len(weak_title) >= 2):
+        elif iran_title and (strong_title or airlines_title or len(weak_title) >= 1):
             publishable = True
         elif airlines_title and iran_title:
             publishable = True
@@ -428,7 +472,11 @@ class Classifier:
             publishable = True
 
         # وتوی موضوعات پرت: ورزش/سرگرمی در تیتر، مگر موجودیت هوانوردی در تیتر باشد
-        if publishable and self._hit(title_text, self._negative_title):
+        if (
+            not airport_hashtag_feed
+            and publishable
+            and self._hit(title_text, self._negative_title)
+        ):
             if not (airports_title or airlines_title or strong_title):
                 publishable = False
 
@@ -436,7 +484,11 @@ class Classifier:
         # اطلاعاتی به ایران در یک پایگاه نظامی خارجی» خبر حریم هوایی نیست،
         # حتی اگر بدنه پر از aircraft/flights باشد. ثبت می‌شود ولی پوش
         # نمی‌شود؛ مگر اینکه خود تیتر سیگنال عملیاتی واقعی داشته باشد.
-        if publishable and self._hit(title_text, self._off_topic_title):
+        if (
+            not airport_hashtag_feed
+            and publishable
+            and self._hit(title_text, self._off_topic_title)
+        ):
             operational_title = (
                 bool(self._distinct_hits(title_text, self._airspace_signal))
                 or bool(airports_title)

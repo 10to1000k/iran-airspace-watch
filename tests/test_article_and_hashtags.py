@@ -296,6 +296,31 @@ class BodyCapTests(unittest.TestCase):
         self.assertLessEqual(len(body), collector.max_body_chars + 1)
         self.assertTrue(body.endswith("…"))
 
+    def test_rsshub_tag_feed_carries_tag_to_classifier_and_telegram(self):
+        from src.collectors import RssCollector
+
+        config = load_config()
+        collector = RssCollector(config, db=None)
+        xml = b"""<?xml version='1.0'?><rss version='2.0'><channel>
+        <item><title>Airspace update</title><link>https://x.com/post/1</link>
+        <description>Short post.</description></item></channel></rss>"""
+        source = {
+            "id": "social_x_tag_iran_airspace",
+            "name": "X #IranAirspace",
+            "url": "http://social-feed-hub:1200/twitter/keyword/%23IranAirspace",
+            "lang": "en",
+            "country": "INTL",
+            "tier": 1,
+            "watched_hashtags": ["IranAirspace"],
+            "airport_hashtag_feed": True,
+        }
+        with patch.object(collector, "_read_bounded", return_value=xml):
+            items = collector._fetch(source)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].extra["watched_hashtags"], ["IranAirspace"])
+        self.assertIn("#IranAirspace", items[0].extra["hashtags"])
+        self.assertTrue(items[0].extra["airport_hashtag_feed"])
+
     def test_telegram_collector_reads_cap_from_config(self):
         from src.collectors import TelegramChannelCollector
 
@@ -349,6 +374,71 @@ class HashtagMonitoringTests(unittest.TestCase):
         self.assertEqual(len(hashtag_queries), 1)
         self.assertIn("#MahanAir", hashtag_queries[0])
         self.assertIn("-filter:replies", hashtag_queries[0])
+
+    def test_rsshub_hashtag_route_metadata_is_a_topic_signal(self):
+        classifier = Classifier(load_config())
+        item = RawItem(
+            source_id="social_ig_tag_iran_airspace",
+            source_name="Instagram #IranAirspace",
+            source_url="http://social-feed-hub:1200/instagram/tags/IranAirspace",
+            title="Regional aviation update",
+            body="A short post without its original hashtag text.",
+            url="https://www.instagram.com/p/example/",
+            lang="en",
+            country="INTL",
+            kind="rss",
+            extra={"watched_hashtags": ["IranAirspace"]},
+        )
+        result = classifier.classify(item)
+        self.assertTrue(result.relevant)
+        self.assertTrue(result.publishable)
+        self.assertEqual(result.category, "airspace")
+
+    def test_social_hashtag_feeds_are_enabled_with_publish_all_metadata(self):
+        config = load_config()
+        sources = config.sources.get("sources", [])
+        hashtag_feeds = [s for s in sources if s["id"].startswith("social_") and "_tag_" in s["id"]]
+        self.assertEqual(len(hashtag_feeds), 50)
+        self.assertTrue(all(s.get("enabled") for s in hashtag_feeds))
+        self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
+        self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
+
+    def test_airport_hashtag_feed_bypasses_keyword_thresholds_and_vetoes(self):
+        classifier = Classifier(load_config())
+        item = RawItem(
+            source_id="social_ig_tag_mashhad_airport",
+            source_name="Instagram #MashhadAirport",
+            source_url="http://social-feed-hub:1200/instagram/tags/MashhadAirport",
+            title="Local council announces a new museum",
+            body="A short post with no aviation keywords.",
+            url="https://www.instagram.com/p/example/",
+            lang="en",
+            country="INTL",
+            kind="rss",
+            extra={"watched_hashtags": ["MashhadAirport"], "airport_hashtag_feed": True},
+        )
+        result = classifier.classify(item)
+        self.assertTrue(result.relevant)
+        self.assertTrue(result.publishable)
+        self.assertEqual(result.category, "airport")
+        self.assertIn("IR", result.countries)
+
+    def test_single_aviation_keyword_is_enough_when_iran_is_present(self):
+        classifier = Classifier(load_config())
+        item = RawItem(
+            source_id="rss_test",
+            source_name="Test Feed",
+            source_url="",
+            title="Iran flight update",
+            body="",
+            url="",
+            lang="en",
+            country="INTL",
+            kind="rss",
+        )
+        result = classifier.classify(item)
+        self.assertTrue(result.relevant)
+        self.assertTrue(result.publishable)
 
     def test_terse_tehran_fir_post_passes_relevance_via_signal(self):
         classifier = Classifier(load_config())
