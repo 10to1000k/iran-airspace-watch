@@ -128,6 +128,15 @@ class RssCollector:
             link = raw_link or source["url"]
             if not title and not body:
                 continue
+            watched = [
+                str(tag).strip().lstrip("#")
+                for tag in (source.get("watched_hashtags") or [])
+                if str(tag).strip()
+            ]
+            hashtags = list(dict.fromkeys(
+                [f"#{tag}" for tag in watched]
+                + extract_hashtags(f"{title} {body}")
+            ))[:6]
             out.append(
                 RawItem(
                     source_id=source["id"],
@@ -140,7 +149,13 @@ class RssCollector:
                     country=source.get("country", "INTL"),
                     kind="rss",
                     published_at=published,
-                    extra={"tier": source.get("tier", 2)},
+                    extra={
+                        "tier": source.get("tier", 2),
+                        "hashtags": hashtags,
+                        # RSSHub hashtag routes are known topic signals even when
+                        # the platform omits the searched tag from its feed text.
+                        "watched_hashtags": watched,
+                    },
                 )
             )
         return out

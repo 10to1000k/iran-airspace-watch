@@ -133,12 +133,38 @@ sources:
   - {id: social_ig_tass, name: "TASS (Instagram)", type: rss, url: "http://social-feed-hub:1200/instagram/user/tass_agency", lang: ru, country: RU, tier: 0, enabled: false}
   - {id: social_ig_aljazeera, name: "Al Jazeera English (Instagram)", type: rss, url: "http://social-feed-hub:1200/instagram/user/aljazeeraenglish", lang: en, country: INTL, tier: 2, enabled: false}
 
+  # فیدهای هشتگی RSSHub: تا آزمون مسیرهای /twitter/keyword و /instagram/tags در کلاستر خاموش‌اند.
+  # هر تگ با جست‌وجوی خودش می‌آید؛ سقف Instagram را محافظه‌کارانه زیر ۳۰ هشتگ یکتا در هفته نگه می‌داریم.
+  - {id: social_x_tag_iran_airspace, name: "X #IranAirspace", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23IranAirspace", lang: en, country: INTL, tier: 1, watched_hashtags: [IranAirspace], enabled: false}
+  - {id: social_ig_tag_iran_airspace, name: "Instagram #IranAirspace", type: rss, url: "http://social-feed-hub:1200/instagram/tags/IranAirspace", lang: en, country: INTL, tier: 1, watched_hashtags: [IranAirspace], enabled: false}
+  - {id: social_x_tag_tehran_fir, name: "X #TehranFIR", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23TehranFIR", lang: en, country: INTL, tier: 1, watched_hashtags: [TehranFIR], enabled: false}
+  - {id: social_ig_tag_tehran_fir, name: "Instagram #TehranFIR", type: rss, url: "http://social-feed-hub:1200/instagram/tags/TehranFIR", lang: en, country: INTL, tier: 1, watched_hashtags: [TehranFIR], enabled: false}
+  - {id: social_x_tag_iran_flights, name: "X #IranFlights", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23IranFlights", lang: en, country: INTL, tier: 1, watched_hashtags: [IranFlights], enabled: false}
+  - {id: social_ig_tag_iran_flights, name: "Instagram #IranFlights", type: rss, url: "http://social-feed-hub:1200/instagram/tags/IranFlights", lang: en, country: INTL, tier: 1, watched_hashtags: [IranFlights], enabled: false}
+  - {id: social_x_tag_flights_to_iran, name: "X #FlightsToIran", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23FlightsToIran", lang: en, country: INTL, tier: 1, watched_hashtags: [FlightsToIran], enabled: false}
+  - {id: social_ig_tag_flights_to_iran, name: "Instagram #FlightsToIran", type: rss, url: "http://social-feed-hub:1200/instagram/tags/FlightsToIran", lang: en, country: INTL, tier: 1, watched_hashtags: [FlightsToIran], enabled: false}
+  - {id: social_x_tag_imam_khomeini_airport, name: "X #ImamKhomeiniAirport", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23ImamKhomeiniAirport", lang: en, country: INTL, tier: 1, watched_hashtags: [ImamKhomeiniAirport], enabled: false}
+  - {id: social_ig_tag_imam_khomeini_airport, name: "Instagram #ImamKhomeiniAirport", type: rss, url: "http://social-feed-hub:1200/instagram/tags/ImamKhomeiniAirport", lang: en, country: INTL, tier: 1, watched_hashtags: [ImamKhomeiniAirport], enabled: false}
+  - {id: social_x_tag_mehrabad_airport, name: "X #MehrabadAirport", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23MehrabadAirport", lang: en, country: INTL, tier: 1, watched_hashtags: [MehrabadAirport], enabled: false}
+  - {id: social_ig_tag_mehrabad_airport, name: "Instagram #MehrabadAirport", type: rss, url: "http://social-feed-hub:1200/instagram/tags/MehrabadAirport", lang: en, country: INTL, tier: 1, watched_hashtags: [MehrabadAirport], enabled: false}
+  - {id: social_x_tag_flight_tehran, name: "X #پرواز_تهران", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23%D9%BE%D8%B1%D9%88%D8%A7%D8%B2_%D8%AA%D9%87%D8%B1%D8%A7%D9%86", lang: fa, country: INTL, tier: 1, watched_hashtags: [پرواز_تهران], enabled: false}
+  - {id: social_ig_tag_flight_tehran, name: "Instagram #پرواز_تهران", type: rss, url: "http://social-feed-hub:1200/instagram/tags/%D9%BE%D8%B1%D9%88%D8%A7%D8%B2_%D8%AA%D9%87%D8%B1%D8%A7%D9%86", lang: fa, country: INTL, tier: 1, watched_hashtags: [پرواز_تهران], enabled: false}
+  - {id: social_x_tag_flight_iran, name: "X #پرواز_به_ایران", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23%D9%BE%D8%B1%D9%88%D8%A7%D8%B2_%D8%A8%D9%87_%D8%A7%DB%8C%D8%B1%D8%A7%D9%86", lang: fa, country: INTL, tier: 1, watched_hashtags: [پرواز_به_ایران], enabled: false}
+  - {id: social_ig_tag_flight_iran, name: "Instagram #پرواز_به_ایران", type: rss, url: "http://social-feed-hub:1200/instagram/tags/%D9%BE%D8%B1%D9%88%D8%A7%D8%B2_%D8%A8%D9%87_%D8%A7%DB%8C%D8%B1%D8%A7%D9%86", lang: fa, country: INTL, tier: 1, watched_hashtags: [پرواز_به_ایران], enabled: false}
+  - {id: social_x_tag_iran_airport_ika, name: "X #فرودگاه_امام_خمینی", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23%D9%81%D8%B1%D9%88%D8%AF%DA%AF%D8%A7%D9%87_%D8%A7%D9%85%D8%A7%D9%85_%D8%AE%D9%85%DB%8C%D9%86%DB%8C", lang: fa, country: INTL, tier: 1, watched_hashtags: [فرودگاه_امام_خمینی], enabled: false}
+  - {id: social_ig_tag_iran_airport_ika, name: "Instagram #فرودگاه_امام_خمینی", type: rss, url: "http://social-feed-hub:1200/instagram/tags/%D9%81%D8%B1%D9%88%D8%AF%DA%AF%D8%A7%D9%87_%D8%A7%D9%85%D8%A7%D9%85_%D8%AE%D9%85%DB%8C%D9%86%DB%8C", lang: fa, country: INTL, tier: 1, watched_hashtags: [فرودگاه_امام_خمینی], enabled: false}
+  - {id: social_x_tag_iran_airport_mehrabad, name: "X #فرودگاه_مهرآباد", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23%D9%81%D8%B1%D9%88%D8%AF%DA%AF%D8%A7%D9%87_%D9%85%D9%87%D8%B1%D8%A2%D8%A8%D8%A7%D8%AF", lang: fa, country: INTL, tier: 1, watched_hashtags: [فرودگاه_مهرآباد], enabled: false}
+  - {id: social_ig_tag_iran_airport_mehrabad, name: "Instagram #فرودگاه_مهرآباد", type: rss, url: "http://social-feed-hub:1200/instagram/tags/%D9%81%D8%B1%D9%88%D8%AF%DA%AF%D8%A7%D9%87_%D9%85%D9%87%D8%B1%D8%A2%D8%A8%D8%A7%D8%AF", lang: fa, country: INTL, tier: 1, watched_hashtags: [فرودگاه_مهرآباد], enabled: false}
+  - {id: social_x_tag_iran_airspace_fa, name: "X #حریم_هوایی_ایران", type: rss, url: "http://social-feed-hub:1200/twitter/keyword/%23%D8%AD%D8%B1%DB%8C%D9%85_%D9%87%D9%88%D8%A7%DB%8C%DB%8C_%D8%A7%DB%8C%D8%B1%D8%A7%D9%86", lang: fa, country: INTL, tier: 1, watched_hashtags: [حریم_هوایی_ایران], enabled: false}
+  - {id: social_ig_tag_iran_airspace_fa, name: "Instagram #حریم_هوایی_ایران", type: rss, url: "http://social-feed-hub:1200/instagram/tags/%D8%AD%D8%B1%DB%8C%D9%85_%D9%87%D9%88%D8%A7%DB%8C%DB%8C_%D8%A7%DB%8C%D8%B1%D8%A7%D9%86", lang: fa, country: INTL, tier: 1, watched_hashtags: [حریم_هوایی_ایران], enabled: false}
+
 # هشتگ‌های پلتفرم‌ها (تلگرام و X): جفت «ایران + هوانوردی» در یک پست کوتاه
 # نشانه‌ی موضوع اصلی است و در طبقه‌بند امتیاز ارسال می‌گیرد. در جست‌وجوی X هم
 # از همین فهرست کوئری ساخته می‌شود (XCollector). هشتگ تازه را همین‌جا اضافه کن.
 hashtags:
-  iran: ["#Iran", "#Tehran", "#ایران", "#تهران", "#حریم_هوایی", "#IranAirspace"]
-  aviation: ["#NOTAM", "#TehranFIR", "#OIIX", "#OIIE", "#OIII", "#IKA", "#aviation", "#airspace", "#پرواز", "#فرودگاه", "#مهرآباد"]
+  # ترکیب‌های هدفمند ایران+هوانوردی، به‌عنوان سیگنال جست‌وجوی شبکه‌های اجتماعی
+  iran: ["#Iran", "#Tehran", "#ایران", "#تهران", "#حریم_هوایی", "#IranAirspace", "#IranFlights", "#FlightsToIran", "#پرواز_به_ایران", "#حریم_هوایی_ایران", "#TehranFIR", "#ImamKhomeiniAirport", "#MehrabadAirport", "#فرودگاه_امام_خمینی", "#فرودگاه_مهرآباد", "#پرواز_تهران"]
+  aviation: ["#NOTAM", "#TehranFIR", "#OIIX", "#OIIE", "#OIII", "#IKA", "#aviation", "#airspace", "#پرواز", "#فرودگاه", "#مهرآباد", "#IranAirspace", "#IranFlights", "#FlightsToIran", "#پرواز_به_ایران", "#حریم_هوایی_ایران", "#ImamKhomeiniAirport", "#MehrabadAirport", "#فرودگاه_امام_خمینی", "#فرودگاه_مهرآباد", "#پرواز_تهران"]
 
 # منابع متن‌باز بدون کلید:
 # - GDELT (پروژه‌ی متن‌باز پایش اخبار جهان): کالکتورش در src/collectors.py است و
