@@ -95,6 +95,20 @@ hashtags:
     - فرودگاه_امام_خمینی
     - فرودگاه_مهرآباد
     - حریم_هوایی_ایران
+    - IranAirports
+    - IranAirport
+    - TehranAirport
+    - MashhadAirport
+    - ShirazAirport
+    - IsfahanAirport
+    - TabrizAirport
+    - KishAirport
+    - BandarAbbasAirport
+    - AhvazAirport
+    - فرودگاه_های_ایران
+    - فرودگاه_مشهد
+    - فرودگاه_شیراز
+    - فرودگاه_تبریز
   instagram:
     # فعال‌سازی فقط با ENABLE_INSTAGRAM=true (+ اختیاری: INSTAGRAM_USERNAME/PASSWORD)
     # ⚠️ اسکرپینگ اینستاگرام خلاف شرایط سرویس است؛ مسئولیت با فعال‌کننده است.

@@ -312,12 +312,14 @@ class BodyCapTests(unittest.TestCase):
             "country": "INTL",
             "tier": 1,
             "watched_hashtags": ["IranAirspace"],
+            "airport_hashtag_feed": True,
         }
         with patch.object(collector, "_read_bounded", return_value=xml):
             items = collector._fetch(source)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].extra["watched_hashtags"], ["IranAirspace"])
         self.assertIn("#IranAirspace", items[0].extra["hashtags"])
+        self.assertTrue(items[0].extra["airport_hashtag_feed"])
 
     def test_telegram_collector_reads_cap_from_config(self):
         from src.collectors import TelegramChannelCollector
@@ -398,7 +400,46 @@ class HashtagMonitoringTests(unittest.TestCase):
         hashtag_feeds = [s for s in sources if s["id"].startswith("social_") and "_tag_" in s["id"]]
         self.assertTrue(hashtag_feeds)
         self.assertTrue(all(not s.get("enabled", True) for s in hashtag_feeds))
+        self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
+        self.assertGreaterEqual(len(hashtag_feeds), 50)
         self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
+
+    def test_airport_hashtag_feed_bypasses_keyword_thresholds_and_vetoes(self):
+        classifier = Classifier(load_config())
+        item = RawItem(
+            source_id="social_ig_tag_mashhad_airport",
+            source_name="Instagram #MashhadAirport",
+            source_url="http://social-feed-hub:1200/instagram/tags/MashhadAirport",
+            title="Local council announces a new museum",
+            body="A short post with no aviation keywords.",
+            url="https://www.instagram.com/p/example/",
+            lang="en",
+            country="INTL",
+            kind="rss",
+            extra={"watched_hashtags": ["MashhadAirport"], "airport_hashtag_feed": True},
+        )
+        result = classifier.classify(item)
+        self.assertTrue(result.relevant)
+        self.assertTrue(result.publishable)
+        self.assertEqual(result.category, "airport")
+        self.assertIn("IR", result.countries)
+
+    def test_single_aviation_keyword_is_enough_when_iran_is_present(self):
+        classifier = Classifier(load_config())
+        item = RawItem(
+            source_id="rss_test",
+            source_name="Test Feed",
+            source_url="",
+            title="Iran flight update",
+            body="",
+            url="",
+            lang="en",
+            country="INTL",
+            kind="rss",
+        )
+        result = classifier.classify(item)
+        self.assertTrue(result.relevant)
+        self.assertTrue(result.publishable)
 
     def test_terse_tehran_fir_post_passes_relevance_via_signal(self):
         classifier = Classifier(load_config())

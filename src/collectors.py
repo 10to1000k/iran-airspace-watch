@@ -155,6 +155,7 @@ class RssCollector:
                         # RSSHub hashtag routes are known topic signals even when
                         # the platform omits the searched tag from its feed text.
                         "watched_hashtags": watched,
+                        "airport_hashtag_feed": bool(source.get("airport_hashtag_feed", False)),
                     },
                 )
             )

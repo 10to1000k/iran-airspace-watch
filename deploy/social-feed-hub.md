@@ -52,9 +52,9 @@ The live-tested Anadolu X and Instagram routes are enabled as a pilot in `config
 
 ## Hashtag-feed pilot
 
-The project defines monitored terms for Tehran airports, Iran flights and Persian/English variants. Candidate RSSHub hashtag routes are listed in `config/sources.yaml` but intentionally remain `enabled: false` until their exact paths return valid feeds in the live cluster. They carry a `watched_hashtags` marker so a matched platform tag is preserved for the relevance filter and included in the Telegram post.
+The project defines a broad watchlist for Iranian airports (including Tehran, Mashhad, Shiraz, Isfahan, Tabriz, Kish, Bandar Abbas and Ahvaz), plus general Iran-airport and Persian variants. There are 25 distinct RSSHub hashtag terms (50 X/Instagram candidate routes) in `config/sources.yaml`; all intentionally remain `enabled: false` until their exact paths return valid feeds in the live cluster. Each route carries `airport_hashtag_feed: true`: every returned item is treated as publishable and bypasses keyword thresholds and topic-title vetoes, as requested. This can include noisy or unrelated posts using a watched hashtag.
 
-The pilot uses at most 11 distinct Instagram tags, below Meta's documented 30 unique hashtag searches per rolling 7 days. Test one known tag per platform from the bot pod before enabling the rows. For example:
+The watchlist is capped at 30 unique terms to stay within Meta's documented 30 unique hashtag searches per rolling 7 days. Test a representative tag per platform from the bot pod before enabling any rows. For example:
 
 ```powershell
 $pod = oc get pod -l app=airwatch -o jsonpath='{.items[0].metadata.name}'
