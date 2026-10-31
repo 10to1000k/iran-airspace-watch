@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     استقرار روی OpenShift Developer Sandbox — نسخه‌ی ویندوز / PowerShell
 
@@ -46,12 +46,12 @@ function Step([string]$Message) {
 }
 
 # ── پیش‌نیازها ────────────────────────────────────────────────
-cmd /c "oc version --client >nul 2>&1"
+& oc version --client *> $null
 if ($LASTEXITCODE -ne 0) {
     Fail "oc نصب نیست یا در PATH نیست. ترمینال را ببند و دوباره باز کن، یا C:\Users\<you>\bin را به PATH اضافه کن."
 }
 
-cmd /c "oc whoami >nul 2>&1"
+& oc whoami *> $null
 if ($LASTEXITCODE -ne 0) {
     Fail "با oc لاگین نیستی. اول این را بزن:  oc login --token=... --server=https://api.sandbox-....openshiftapps.com:6443"
 }
@@ -61,12 +61,18 @@ if (-not (Test-Path ".env")) {
 }
 
 if (-not $Repo) {
-    $Repo = (cmd /c "git remote get-url origin 2>nul").Trim()
-    if (-not $Repo) { Fail "ریپو مشخص نشده و ریموت origin هم نیست. با -Repo آدرس بده." }
+    $repoOutput = git remote get-url origin 2>$null
+    if ($LASTEXITCODE -eq 0 -and $repoOutput) {
+        $Repo = (($repoOutput | Select-Object -First 1).ToString()).Trim()
+    } else {
+        $Repo = ""
+        Fail "ریپو مشخص نشده و ریموت origin هم نیست. با -Repo آدرس بده."
+    }
 }
 
-$ns = (cmd /c "oc project -q").Trim()
-if ($LASTEXITCODE -ne 0 -or -not $ns) { Fail "پروژه‌ی فعال پیدا نشد." }
+$nsOutput = & oc project -q
+if ($LASTEXITCODE -ne 0 -or -not $nsOutput) { Fail "پروژه‌ی فعال پیدا نشد." }
+$ns = (($nsOutput | Select-Object -First 1).ToString()).Trim()
 
 if (-not $Image) {
     $Image = "image-registry.openshift-image-registry.svc:5000/$ns/iran-airspace-watch:latest"
@@ -88,10 +94,14 @@ Step "ساخت/به‌روزرسانی سکرت airwatch-secrets"
 # از پوشه‌ی Temp کاربر استفاده نکن؛ در برخی ویندوزها TEMP به مسیر 8.3
 # (مثل C:\Users\SHOPA~1) اشاره می‌کند که ممکن است در PowerShell قابل resolve نباشد.
 $secretFile = Join-Path $root ".deploy-secret.rendered.yaml"
-$cmd = "oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml > `"$secretFile`""
-cmd /c $cmd
-if ($LASTEXITCODE -ne 0) { Fail "خواندن .env و ساخت سکرت شکست خورد." }
-cmd /c "oc apply -f `"$secretFile`" >nul"
+$secretYaml = & oc create secret generic airwatch-secrets --from-env-file=.env --dry-run=client -o yaml
+if ($LASTEXITCODE -ne 0 -or -not $secretYaml) { Fail "خواندن .env و ساخت سکرت شکست خورد." }
+[System.IO.File]::WriteAllText(
+    $secretFile,
+    (($secretYaml -join [Environment]::NewLine) + [Environment]::NewLine),
+    $utf8
+)
+& oc apply -f $secretFile *> $null
 if ($LASTEXITCODE -ne 0) { Fail "اعمال سکرت شکست خورد." }
 if (Test-Path -LiteralPath $secretFile) {
     try {
@@ -105,22 +115,22 @@ Write-Host "   سکرت به‌روز شد" -ForegroundColor DarkGray
 # ── منابع بیلد ────────────────────────────────────────────────
 Step "اعمال ImageStream / BuildConfig / PVC"
 Render "deploy/build.yaml" ".deploy-build.rendered.yaml"
-cmd /c "oc apply -f .deploy-build.rendered.yaml"
+& oc apply -f .deploy-build.rendered.yaml
 if ($LASTEXITCODE -ne 0) { Fail "اعمال منابع بیلد شکست خورد." }
 
 # ── RSSHub و Redis ────────────────────────────────────────────
 Step "اعمال RSSHub/Redis (کش هشتگ دو دقیقه‌ای)"
-cmd /c "oc apply -f deploy/social-feed-hub.yaml"
+& oc apply -f deploy/social-feed-hub.yaml
 if ($LASTEXITCODE -ne 0) { Fail "اعمال RSSHub/Redis شکست خورد." }
-cmd /c "oc rollout status deployment/social-feed-redis --timeout=180s"
+& oc rollout status deployment/social-feed-redis --timeout=180s
 if ($LASTEXITCODE -ne 0) { Fail "Redis آماده نشد." }
-cmd /c "oc rollout status deployment/social-feed-hub --timeout=300s"
+& oc rollout status deployment/social-feed-hub --timeout=300s
 if ($LASTEXITCODE -ne 0) { Fail "RSSHub آماده نشد." }
 
 # ── بیلد ──────────────────────────────────────────────────────
 if (-not $SkipBuild) {
     Step "بیلد ایمیج داخل کلاستر (چند دقیقه؛ اولین بار طولانی‌تر)"
-    cmd /c "oc start-build airwatch --follow"
+    & oc start-build airwatch --follow
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "بیلد شکست خورد. لاگ کامل:" -ForegroundColor Yellow
@@ -132,14 +142,14 @@ if (-not $SkipBuild) {
 # ── استقرار ───────────────────────────────────────────────────
 Step "استقرار Deployment"
 Render "deploy/app.yaml" ".deploy-app.rendered.yaml"
-cmd /c "oc apply -f .deploy-app.rendered.yaml"
+& oc apply -f .deploy-app.rendered.yaml
 if ($LASTEXITCODE -ne 0) { Fail "اعمال Deployment شکست خورد." }
 
 # تگ ایمیج ثابت است (:latest)، پس بدون restart پاد قدیمی می‌ماند.
-cmd /c "oc rollout restart deployment/airwatch >nul"
+& oc rollout restart deployment/airwatch | Out-Null
 
 Step "انتظار برای آماده‌شدن pod"
-cmd /c "oc rollout status deployment/airwatch --timeout=300s"
+& oc rollout status deployment/airwatch --timeout=300s
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "pod آماده نشد. وضعیت و لاگ:" -ForegroundColor Yellow
