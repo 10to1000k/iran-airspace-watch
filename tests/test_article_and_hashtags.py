@@ -321,6 +321,29 @@ class BodyCapTests(unittest.TestCase):
         self.assertIn("#IranAirspace", items[0].extra["hashtags"])
         self.assertTrue(items[0].extra["airport_hashtag_feed"])
 
+    def test_social_feed_can_return_thirty_items_per_feed(self):
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        entries = "".join(
+            f"<item><title>Airport update {i}</title><link>https://x.com/post/{i}</link></item>"
+            for i in range(35)
+        )
+        xml = f"<?xml version='1.0'?><rss><channel>{entries}</channel></rss>".encode()
+        source = {
+            "id": "social_x_tag_test",
+            "name": "X airport tag",
+            "url": "http://social-feed-hub:1200/twitter/keyword/%23TestAirport",
+            "lang": "en",
+            "country": "INTL",
+            "tier": 1,
+            "airport_hashtag_feed": True,
+            "max_items_per_feed": 30,
+        }
+        with patch.object(collector, "_read_bounded", return_value=xml):
+            items = collector._fetch(source)
+        self.assertEqual(len(items), 30)
+
     def test_telegram_collector_reads_cap_from_config(self):
         from src.collectors import TelegramChannelCollector
 
@@ -401,6 +424,8 @@ class HashtagMonitoringTests(unittest.TestCase):
         self.assertEqual(len(hashtag_feeds), 50)
         self.assertTrue(all(s.get("enabled") for s in hashtag_feeds))
         self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
+        self.assertTrue(all(s.get("max_items_per_feed") == 30 for s in hashtag_feeds))
+        self.assertEqual(config.get("poll.social_hashtag_seconds"), 30)
         self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
 
     def test_airport_hashtag_feed_bypasses_keyword_thresholds_and_vetoes(self):

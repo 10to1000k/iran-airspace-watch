@@ -45,6 +45,12 @@ oc create secret generic airwatch-secrets \
 echo "→ اعمال ImageStream / BuildConfig / PVC"
 render deploy/build.yaml | oc apply -f -
 
+# ── RSSHub و Redis ────────────────────────────────────────────
+echo "→ اعمال RSSHub/Redis (کش هشتگ دو دقیقه‌ای)"
+oc apply -f deploy/social-feed-hub.yaml
+oc rollout status deployment/social-feed-redis --timeout=180s
+oc rollout status deployment/social-feed-hub --timeout=300s
+
 # ── بیلد ──────────────────────────────────────────────────────
 echo "→ بیلد ایمیج داخل کلاستر (چند دقیقه)"
 oc start-build airwatch --follow

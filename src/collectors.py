@@ -62,8 +62,8 @@ class RssCollector:
             return True
         return False
 
-    def poll(self) -> list[RawItem]:
-        sources = self.cfg.rss_sources
+    def poll(self, sources: list[dict] | None = None) -> list[RawItem]:
+        sources = self.cfg.rss_sources if sources is None else sources
         if not sources:
             return []
 
@@ -116,7 +116,8 @@ class RssCollector:
         cutoff = util.now_utc() - timedelta(hours=self.max_age_hours)
 
         out: list[RawItem] = []
-        for entry in parsed.entries[: self.per_feed]:
+        entry_limit = int(source.get("max_items_per_feed", self.per_feed))
+        for entry in parsed.entries[:entry_limit]:
             published = _entry_time(entry)
             if published and published < cutoff:
                 continue
@@ -642,7 +643,27 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     x = XCollector(config, airline_index)
     instagram = InstagramHashtagCollector(config)
 
-    jobs = [CollectorJob("rss", int(config.get("poll.rss_seconds", 75)), rss.poll)]
+    hashtag_sources = [
+        source for source in config.rss_sources if source.get("airport_hashtag_feed")
+    ]
+    regular_sources = [
+        source for source in config.rss_sources if not source.get("airport_hashtag_feed")
+    ]
+    jobs = [
+        CollectorJob(
+            "rss",
+            int(config.get("poll.rss_seconds", 75)),
+            lambda: rss.poll(regular_sources),
+        )
+    ]
+    if hashtag_sources:
+        jobs.append(
+            CollectorJob(
+                "social_hashtags",
+                int(config.get("poll.social_hashtag_seconds", 30)),
+                lambda: rss.poll(hashtag_sources),
+            )
+        )
     # فقط کالکتورهایی که واقعاً فعال‌اند زمان‌بندی می‌شوند تا نخ بیکار نسازند
     # و سلامت‌سنج بتواند مرگ کالکتورهای واقعی را تشخیص دهد.
     if config.get("notam.enabled", False):

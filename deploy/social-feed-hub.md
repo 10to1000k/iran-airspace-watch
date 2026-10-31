@@ -48,11 +48,13 @@ oc exec $pod -- python -c "import urllib.request; u='http://social-feed-hub:1200
 
 Test each route from the bot pod. The Anadolu X and Instagram profile feeds are the live-tested profile pilot; other candidate profile feeds remain disabled until individually validated. RSSHub's profile routes are `/twitter/user/:handle` and `/instagram/user/:handle`; upstream changes may require updating these paths.
 
-## Hashtag-feed pilot
+## Active hashtag feeds and rapid polling
 
-The project defines a broad watchlist for Iranian airports (including Tehran, Mashhad, Shiraz, Isfahan, Tabriz, Kish, Bandar Abbas and Ahvaz), plus general Iran-airport and Persian variants. There are 25 distinct RSSHub hashtag terms (50 X/Instagram routes) in `config/sources.yaml`; they are enabled at the user's request. The Instagram `IranAirspace` route returned HTTP 200 with 33 RSS items. X could not yet be tested because `oc exec` repeatedly lost DNS/TLS connectivity to the OpenShift API; this is not evidence that the X route itself failed. The collector isolates per-feed errors, so a broken X route should not stop other RSS feeds, but monitor its logs. Each route carries `airport_hashtag_feed: true`: every returned item is publishable and bypasses keyword thresholds and topic-title vetoes. This may send noisy or unrelated posts that reuse a watched hashtag.
+The project monitors 25 configured hashtag terms across X and Instagram (50 RSSHub routes), covering major Iranian airports plus general and Persian variants. The running deployment has returned HTTP 200 for many routes on both platforms; some X searches such as `#TehranFIR` and two Persian flight tags return RSSHub 503 `route is empty`. These per-tag failures do not stop successful feeds. Every returned item from a dedicated airport hashtag feed is publishable and bypasses keyword thresholds and topic-title vetoes, so hashtag misuse can create noise.
 
-The watchlist is capped at 30 unique terms; these 25 Instagram searches are under Meta's documented 30 unique hashtag searches per rolling 7 days. If Instagram returns 429 or a login/error page, disable the affected Instagram hashtag rows and allow cooldown. To re-test routes from the bot pod:
+To publish more quickly, hashtag feeds run in their own 30-second collector cycle (general RSS stays at 75 seconds). Each hashtag feed can contribute up to 30 entries, limited to the latest 12 hours. RSSHub route cache is set to 120 seconds; effective end-to-end delay can therefore still be roughly 2.5 minutes plus upstream and Telegram response time. This is an aggressive polling rate and may trigger X/Instagram throttling. There are 25 unique Instagram hashtag searches, within the documented 30-search rolling-week limit; repeated requests may still be rate-limited. If Instagram returns 429 or login pages, disable affected rows and let the cooldown pass. `deploy.ps1` and `deploy.sh` now apply the RSSHub/Redis manifest and wait for rollout as part of deployment.
+
+To re-test routes from the bot pod:
 
 ```powershell
 $pod = oc get pod -l app=airwatch -o jsonpath='{.items[0].metadata.name}'
@@ -60,7 +62,7 @@ oc exec $pod -- python -c "import requests,feedparser; u='http://social-feed-hub
 oc exec $pod -- python -c "import requests,feedparser; u='http://social-feed-hub:1200/instagram/tags/IranAirspace'; r=requests.get(u,timeout=30); f=feedparser.parse(r.content); print('HTTP',r.status_code,'items',len(f.entries)); print(f.feed.get('title'))"
 ```
 
-Only enable hashtag source rows that return HTTP 200 and parse as RSS. If Instagram gives 429, stop retrying and let the cooldown pass; the rows stay off until validated. The `watchlist` also feeds the optional native X/Instagram collectors, but these remain disabled unless their own `ENABLE_X` / `ENABLE_INSTAGRAM` flags are explicitly enabled.
+The `watchlist` also feeds optional native X/Instagram collectors, which remain disabled unless their own `ENABLE_X` / `ENABLE_INSTAGRAM` flags are explicitly enabled. The RSSHub hashtag feeds are the active social path.
 
 ## 4. Monitor and roll back
 
