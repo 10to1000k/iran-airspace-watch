@@ -1414,6 +1414,14 @@ class ManifestValidationTests(unittest.TestCase):
         }
         self.assertEqual(env["CACHE_EXPIRE"], "120")
 
+    def test_powershell_deploy_script_is_utf8_and_applies_social_hub(self):
+        root = Path(__file__).resolve().parent.parent
+        script = (root / "deploy/deploy.ps1").read_bytes()
+        self.assertTrue(script.startswith(bytes.fromhex("efbbbf")))
+        text = script.decode("utf-8-sig")
+        self.assertIn("& oc apply -f deploy/social-feed-hub.yaml", text)
+        self.assertNotIn("cmd /c", text)
+
     def test_keepalive_cronjob_always_pulls_latest_image(self):
         """تگ ایمیج ثابت (:latest) است؛ با IfNotPresent نود ایمیج قدیمیِ
         کش‌شده را اجرا می‌کند — همان باگی که keepalive را Error کرد."""
