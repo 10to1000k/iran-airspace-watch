@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     استقرار روی OpenShift Developer Sandbox — نسخه‌ی ویندوز / PowerShell
 
@@ -107,6 +107,15 @@ Step "اعمال ImageStream / BuildConfig / PVC"
 Render "deploy/build.yaml" ".deploy-build.rendered.yaml"
 cmd /c "oc apply -f .deploy-build.rendered.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "اعمال منابع بیلد شکست خورد." }
+
+# ── RSSHub و Redis ────────────────────────────────────────────
+Step "اعمال RSSHub/Redis (کش هشتگ دو دقیقه‌ای)"
+cmd /c "oc apply -f deploy/social-feed-hub.yaml"
+if ($LASTEXITCODE -ne 0) { Fail "اعمال RSSHub/Redis شکست خورد." }
+cmd /c "oc rollout status deployment/social-feed-redis --timeout=180s"
+if ($LASTEXITCODE -ne 0) { Fail "Redis آماده نشد." }
+cmd /c "oc rollout status deployment/social-feed-hub --timeout=300s"
+if ($LASTEXITCODE -ne 0) { Fail "RSSHub آماده نشد." }
 
 # ── بیلد ──────────────────────────────────────────────────────
 if (-not $SkipBuild) {

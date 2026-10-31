@@ -95,6 +95,9 @@ spec:
               value: production
             - name: CACHE_TYPE
               value: redis
+            # Trade cache freshness against upstream rate limits; 2-minute TTL.
+            - name: CACHE_EXPIRE
+              value: "120"
             - name: REDIS_URL
               value: redis://social-feed-redis:6379/
           envFrom:

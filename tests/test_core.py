@@ -507,8 +507,13 @@ class CollectorTests(unittest.TestCase):
 
         config = load_config(dry_run=True)
         jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
-        # فقط rss و gdelt (متن‌باز، بدون کلید) پیش‌فرض فعال‌اند
-        self.assertEqual([job.name for job in jobs], ["rss", "gdelt"])
+        # فید هشتگی فعال، در چرخه‌ای مستقل و سریع‌تر از RSS عمومی اجرا می‌شود.
+        self.assertEqual(
+            [job.name for job in jobs], ["rss", "social_hashtags", "gdelt"]
+        )
+        by_name = {job.name: job for job in jobs}
+        self.assertEqual(by_name["rss"].interval, 75)
+        self.assertEqual(by_name["social_hashtags"].interval, 30)
 
     def test_gdelt_articles_become_items(self):
         from src.collectors import GdeltCollector
@@ -1390,6 +1395,24 @@ class ManifestValidationTests(unittest.TestCase):
             [doc["kind"] for doc in build_docs],
             ["ImageStream", "BuildConfig", "PersistentVolumeClaim"],
         )
+        hub_docs = [
+            d
+            for d in yaml.safe_load_all(
+                (root / "deploy/social-feed-hub.yaml").read_text("utf-8")
+            )
+            if d
+        ]
+        hub_deployment = next(
+            doc
+            for doc in hub_docs
+            if doc.get("kind") == "Deployment"
+            and doc["metadata"]["name"] == "social-feed-hub"
+        )
+        env = {
+            item["name"]: item.get("value")
+            for item in hub_deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        }
+        self.assertEqual(env["CACHE_EXPIRE"], "120")
 
     def test_keepalive_cronjob_always_pulls_latest_image(self):
         """تگ ایمیج ثابت (:latest) است؛ با IfNotPresent نود ایمیج قدیمیِ
