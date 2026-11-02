@@ -38,6 +38,10 @@ BARE_INDEX_PATHS = {"", "/", "/blog", "/news", "/feed", "/rss"}
 _SOCIAL_CYCLE_SKIPPED = object()
 
 
+class EmptyRssHubRoute(Exception):
+    """RSSHub uses HTTP 503 for a valid route that currently has no items."""
+
+
 class RssCollector:
     def __init__(self, config, db):
         self.cfg = config
@@ -95,6 +99,13 @@ class RssCollector:
 
         items: list[RawItem] = []
         is_social_batch = all(self._is_social_hub_source(s) for s in ready_sources)
+        if is_social_batch:
+            # Poll actual hashtag feeds before optional account-profile routes. A
+            # broken profile route must not prevent all requested hashtag feeds
+            # from being checked in this cycle.
+            ready_sources.sort(
+                key=lambda source: not bool(source.get("airport_hashtag_feed"))
+            )
         worker_limit = self.social_workers if is_social_batch else self.max_workers
         workers = min(worker_limit, len(ready_sources))
         platform_failed = {
@@ -111,6 +122,9 @@ class RssCollector:
                 return _SOCIAL_CYCLE_SKIPPED
             try:
                 return self._fetch(source)
+            except EmptyRssHubRoute:
+                # An empty query is a normal route result, not a platform failure.
+                raise
             except Exception:
                 if platform:
                     platform_failed[platform].set()
@@ -134,6 +148,13 @@ class RssCollector:
                             self._social_retry_after.pop(source["id"], None)
                     if self.db:
                         self.db.mark_source_ok(source["id"])
+                except EmptyRssHubRoute as exc:
+                    # RSSHub encodes an empty X search as HTTP 503. This is not
+                    # an upstream outage and must not trip the platform breaker.
+                    log.info("فید %s فعلاً آیتمی ندارد: %s", source.get("id"), exc)
+                    if self.db:
+                        self.db.mark_source_ok(source["id"])
+                    continue
                 except Exception as exc:  # noqa: BLE001
                     log.warning("فید %s خوانده نشد: %s", source.get("id"), exc)
                     platform = self._social_hub_platform(source)
@@ -187,7 +208,21 @@ class RssCollector:
             timeout=timeout,
             stream=True,
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                error_body = bytearray()
+                for chunk in response.iter_content(chunk_size=2048):
+                    if chunk:
+                        error_body.extend(chunk)
+                    if len(error_body) >= 8192:
+                        break
+                if (
+                    urlparse(url).hostname == "social-feed-hub"
+                    and b"this route is empty" in bytes(error_body).lower()
+                ):
+                    raise EmptyRssHubRoute(
+                        f"RSSHub route is empty (HTTP {response.status_code})"
+                    )
+                response.raise_for_status()
             buf = bytearray()
             for chunk in response.iter_content(chunk_size=32768):
                 if not chunk:
