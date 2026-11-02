@@ -1124,7 +1124,7 @@ class ChatAboutNewsTests(unittest.TestCase):
 
 
 class FormatterTests(unittest.TestCase):
-    def test_format_contains_source_and_badge(self):
+    def test_format_contains_only_title_time_source_and_link(self):
         from src.formatter import format_publication_notice
 
         config = load_config()
@@ -1132,7 +1132,7 @@ class FormatterTests(unittest.TestCase):
             "severity": "critical",
             "category": "airspace",
             "title_fa": "بستن حریم هوایی",
-            "body_fa": "متن خبر",
+            "body_fa": "متن خبر و تلگرام سروش اینستاگرام توییتر",
             "confidence": "multi",
             "numbers_ok": 1,
             "primary_source": "Anadolu Ajansı",
@@ -1140,15 +1140,15 @@ class FormatterTests(unittest.TestCase):
             "first_seen": util.iso(util.now_utc()),
             "airlines": "Turkish Airlines",
             "countries": "IR,TR,PK,TH,VN",
+            "extra": {"hashtags": ["#noise"]},
         }
         text = format_event(event, config)
-        self.assertIn("🔴", text)
+        self.assertIn("بستن حریم هوایی", text)
+        self.assertIn("🕐", text)
         self.assertIn("Anadolu Ajansı", text)
-        self.assertIn("✅", text)
-        self.assertIn("پاکستان", text)
-        self.assertIn("تایلند", text)
-        self.assertIn("ویتنام", text)
         self.assertIn("https://example.com/a", text)
+        for noise in ("متن خبر", "تلگرام", "سروش", "اینستاگرام", "توییتر", "Turkish Airlines", "پاکستان", "#noise", "🔴", "✅"):
+            self.assertNotIn(noise, text)
         self.assertLess(len(text), 4096)
 
         notice = format_publication_notice(event)
