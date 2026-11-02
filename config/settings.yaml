@@ -178,13 +178,12 @@ relevance:
     - aircraft
     - aviation
     - overflight
-    - passenger
+    # «passenger/مسافر» به‌تنهایی نشانه‌ی هوانوردی نیست (مثلاً ترافیک جاده‌ای).
     - پرواز
     - هواپیمایی
     - هواپیما
     - فرودگاه
     - حریم هوایی
-    - مسافر
     - uçuş
     - havayolu
     - havalimanı

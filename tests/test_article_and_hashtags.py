@@ -72,6 +72,15 @@ class ArticleTextTests(unittest.TestCase):
         self.assertLessEqual(len(text), 101)
         self.assertTrue(text)
 
+    def test_redirect_interstitial_is_not_article_text(self):
+        from src.article import extract_article_text
+
+        html = (
+            "<html><body><p>Transferring to the website...</p>"
+            "<p>در حال انتقال به سایت مورد نظر هستید...</p></body></html>"
+        )
+        self.assertEqual(extract_article_text(html, max_chars=1000), "")
+
     def test_broken_html_does_not_raise(self):
         from src.article import extract_article_text
 

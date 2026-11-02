@@ -105,6 +105,19 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result.relevant)
         self.assertFalse(result.publishable)
 
+    def test_chalus_road_traffic_story_is_not_aviation_news(self):
+        """«مسافر» و اشاره به تهران، به‌تنهایی خبر جاده‌ای را هوانوردی نمی‌کند."""
+        result = self.classifier.classify(
+            self.item(
+                "سیل مسافران و بن‌بست ترافیکی چالوس؛ بازنگری مهندسی آزادراه تهران‌شمال است",
+                "Transferring to the website... در حال انتقال به سایت مورد نظر هستید...",
+                lang="fa",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+        self.assertFalse(result.publishable)
+
     def test_robbery_band_is_not_airport_news(self):
         """«باند سارقان» به معنی باند فرودگاه نیست و نباید خبر فرودگاهی شود."""
         result = self.classifier.classify(
