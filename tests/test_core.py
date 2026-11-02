@@ -703,10 +703,12 @@ class CollectorTests(unittest.TestCase):
             regular_ids = {s["id"] for s in poll.call_args.args[0]}
             by_name["social_hashtags"].fn()
             social_ids = {s["id"] for s in poll.call_args.args[0]}
-        self.assertIn("social_ig_anadolu", social_ids)
-        self.assertIn("social_x_anadolu", social_ids)
+        self.assertNotIn("social_ig_anadolu", social_ids)
+        self.assertNotIn("social_x_anadolu", social_ids)
         self.assertNotIn("social_ig_anadolu", regular_ids)
         self.assertNotIn("social_x_anadolu", regular_ids)
+        self.assertIn("social_x_tag_iran_airspace", social_ids)
+        self.assertIn("social_ig_tag_iran_airspace", social_ids)
 
     def test_gdelt_articles_become_items(self):
         from src.collectors import GdeltCollector

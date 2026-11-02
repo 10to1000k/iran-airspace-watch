@@ -256,10 +256,14 @@ class RssCollector:
                 for tag in (source.get("watched_hashtags") or [])
                 if str(tag).strip()
             ]
-            hashtags = list(dict.fromkeys(
-                [f"#{tag}" for tag in watched]
-                + extract_hashtags(f"{title} {body}")
-            ))[:6]
+            # Only social-network feeds carry post hashtags. Ordinary news RSS
+            # may mention tags in article text; those must not become social tags.
+            hashtags = []
+            if self._is_social_hub_source(source):
+                hashtags = list(dict.fromkeys(
+                    [f"#{tag}" for tag in watched]
+                    + extract_hashtags(f"{title} {body}")
+                ))[:6]
             out.append(
                 RawItem(
                     source_id=source["id"],
