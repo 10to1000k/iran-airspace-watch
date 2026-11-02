@@ -105,6 +105,20 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result.relevant)
         self.assertFalse(result.publishable)
 
+    def test_threat_in_a_stage_headline_is_not_an_airline_alert(self):
+        """Arabic رحلة must not match مرحلة; a body-only plane mention is not an alert."""
+        result = self.classifier.classify(
+            self.item(
+                "ترامب: سنضطر إلى توجيه ضربة قاصمة لإيران في مرحلة ما",
+                "رئیس‌جمهور آمریکا گفت بیشتر هواپیماها و کشتی‌های ایران نابود شده‌اند؛ "
+                "در مقطعی ناچار به وارد کردن ضربه‌ای قاطع به ایران هستیم.",
+                lang="ar",
+                country="TR",
+            )
+        )
+        self.assertNotEqual(result.category, "airline")
+        self.assertFalse(result.publishable)
+
     def test_chalus_road_traffic_story_is_not_aviation_news(self):
         """«مسافر» و اشاره به تهران، به‌تنهایی خبر جاده‌ای را هوانوردی نمی‌کند."""
         result = self.classifier.classify(
