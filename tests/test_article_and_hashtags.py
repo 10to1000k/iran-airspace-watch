@@ -330,6 +330,28 @@ class BodyCapTests(unittest.TestCase):
         self.assertIn("#IranAirspace", items[0].extra["hashtags"])
         self.assertTrue(items[0].extra["airport_hashtag_feed"])
 
+    def test_news_agency_rss_does_not_expose_article_hashtags_as_social_tags(self):
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        xml = b"""<?xml version='1.0'?><rss version='2.0'><channel>
+        <item><title>Airport update #TehranFIR</title><link>https://news.example/story/1</link>
+        <description>Article text includes #IranAirspace but is ordinary news RSS.</description></item>
+        </channel></rss>"""
+        source = {
+            "id": "ir_irna",
+            "name": "IRNA",
+            "url": "https://news.example/feed.xml",
+            "lang": "fa",
+            "country": "IR",
+        }
+        with patch.object(collector, "_read_bounded", return_value=xml):
+            items = collector._fetch(source)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].extra["hashtags"], [])
+        self.assertEqual(items[0].extra["watched_hashtags"], [])
+
     def test_social_feed_can_return_thirty_items_per_feed(self):
         from src.collectors import RssCollector
 
@@ -434,6 +456,10 @@ class HashtagMonitoringTests(unittest.TestCase):
         self.assertTrue(all(s.get("enabled") for s in hashtag_feeds))
         self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
         self.assertTrue(all(s.get("max_items_per_feed") == 30 for s in hashtag_feeds))
+        profile_ids = {"social_x_anadolu", "social_ig_anadolu"}
+        profiles = {s["id"]: s for s in sources if s["id"] in profile_ids}
+        self.assertEqual(set(profiles), {"social_x_anadolu", "social_ig_anadolu"})
+        self.assertTrue(all(not s.get("enabled", True) for s in profiles.values()))
         self.assertEqual(config.get("poll.social_hashtag_seconds"), 3600)
         self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
 
