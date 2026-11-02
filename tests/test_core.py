@@ -565,13 +565,13 @@ class CollectorTests(unittest.TestCase):
 
         config = load_config(dry_run=True)
         jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
-        # فید هشتگی فعال، در چرخه‌ای مستقل و سریع‌تر از RSS عمومی اجرا می‌شود.
+        # فید هشتگی در چرخه‌ای مستقل و ساعتی اجرا می‌شود.
         self.assertEqual(
             [job.name for job in jobs], ["rss", "social_hashtags", "gdelt"]
         )
         by_name = {job.name: job for job in jobs}
         self.assertEqual(by_name["rss"].interval, 75)
-        self.assertEqual(by_name["social_hashtags"].interval, 30)
+        self.assertEqual(by_name["social_hashtags"].interval, 3600)
 
     def test_gdelt_articles_become_items(self):
         from src.collectors import GdeltCollector

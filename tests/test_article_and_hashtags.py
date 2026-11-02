@@ -434,7 +434,7 @@ class HashtagMonitoringTests(unittest.TestCase):
         self.assertTrue(all(s.get("enabled") for s in hashtag_feeds))
         self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
         self.assertTrue(all(s.get("max_items_per_feed") == 30 for s in hashtag_feeds))
-        self.assertEqual(config.get("poll.social_hashtag_seconds"), 30)
+        self.assertEqual(config.get("poll.social_hashtag_seconds"), 3600)
         self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
 
     def test_airport_hashtag_feed_bypasses_keyword_thresholds_and_vetoes(self):
