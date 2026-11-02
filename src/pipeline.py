@@ -222,9 +222,9 @@ class Pipeline:
     @staticmethod
     def _social_hashtag_network(event) -> str | None:
         source = str(event["primary_source"] or "")
-        if source.startswith("X #"):
+        if source.startswith("X #") or source.endswith("(X)"):
             return "x"
-        if source.startswith("Instagram #"):
+        if source.startswith("Instagram #") or source.endswith("(Instagram)"):
             return "instagram"
         return None
 
