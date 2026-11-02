@@ -97,19 +97,23 @@ class RssCollector:
         is_social_batch = all(self._is_social_hub_source(s) for s in ready_sources)
         worker_limit = self.social_workers if is_social_batch else self.max_workers
         workers = min(worker_limit, len(ready_sources))
-        instagram_failed = threading.Event()
+        platform_failed = {
+            "instagram": threading.Event(),
+            "x": threading.Event(),
+        }
 
         def fetch_source(source: dict):
             # With the social batch configured to one worker, this check runs
-            # before each upstream route. The first failed Instagram request
-            # prevents the remaining hashtag routes from hitting RSSHub at all.
-            if self._social_hub_platform(source) == "instagram" and instagram_failed.is_set():
+            # before each route. A failure prevents the rest of that platform's
+            # routes from hitting RSSHub in this cycle.
+            platform = self._social_hub_platform(source)
+            if platform and platform_failed[platform].is_set():
                 return _SOCIAL_CYCLE_SKIPPED
             try:
                 return self._fetch(source)
             except Exception:
-                if self._social_hub_platform(source) == "instagram":
-                    instagram_failed.set()
+                if platform:
+                    platform_failed[platform].set()
                 raise
 
         with ThreadPoolExecutor(
@@ -137,22 +141,21 @@ class RssCollector:
                         retry_at = time.monotonic() + self.social_failure_cooldown
                         with self._social_retry_lock:
                             self._social_retry_after[source["id"]] = retry_at
-                            if platform == "instagram":
-                                # Trip the entire Instagram batch circuit, not
-                                # just this single tag, for the cooldown window.
-                                for candidate in sources:
-                                    if self._social_hub_platform(candidate) == "instagram":
-                                        self._social_retry_after[candidate["id"]] = retry_at
-                        if platform == "instagram":
-                            skipped = sum(
-                                self._social_hub_platform(candidate) == "instagram"
-                                and candidate["id"] != source["id"]
-                                for candidate in ready_sources
-                            )
-                            log.warning(
-                                "Instagram feed failed; short-circuiting up to %d remaining hashtag routes for this cycle",
-                                skipped,
-                            )
+                            # Trip this entire platform circuit, not just one
+                            # route, for the cooldown window.
+                            for candidate in sources:
+                                if self._social_hub_platform(candidate) == platform:
+                                    self._social_retry_after[candidate["id"]] = retry_at
+                        skipped = sum(
+                            self._social_hub_platform(candidate) == platform
+                            and candidate["id"] != source["id"]
+                            for candidate in ready_sources
+                        )
+                        log.warning(
+                            "%s feed failed; short-circuiting up to %d remaining routes for this cycle",
+                            platform,
+                            skipped,
+                        )
                     if self.db:
                         self.db.mark_source_error(source["id"], str(exc))
         return items
