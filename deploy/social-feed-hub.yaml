@@ -101,6 +101,9 @@ spec:
             # Instagram 429 responses must not trigger RSSHub's automatic retries.
             - name: REQUEST_RETRY
               value: "0"
+            # Space Instagram upstream starts to one every two seconds.
+            - name: REQUEST_RATE_LIMITS
+              value: '{"www.instagram.com":{"points":1,"duration":2}}'
             - name: REDIS_URL
               value: redis://social-feed-redis:6379/
           envFrom:

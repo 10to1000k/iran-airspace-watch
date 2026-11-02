@@ -587,6 +587,32 @@ class CollectorTests(unittest.TestCase):
             set(collector._social_retry_after), {"ig1", "ig2", "ig3"}
         )
 
+    def test_first_x_failure_short_circuits_remaining_routes_in_cycle(self):
+        from unittest.mock import patch
+
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        sources = [
+            {"id": "x1", "url": "http://social-feed-hub:1200/twitter/keyword/%23One"},
+            {"id": "ig1", "url": "http://social-feed-hub:1200/instagram/tags/One"},
+            {"id": "x2", "url": "http://social-feed-hub:1200/twitter/keyword/%23Two"},
+            {"id": "x3", "url": "http://social-feed-hub:1200/twitter/keyword/%23Three"},
+        ]
+        calls = []
+
+        def fetch(source):
+            calls.append(source["id"])
+            if source["id"] == "x1":
+                raise RuntimeError("RSSHub returned 503 for X")
+            return []
+
+        with patch.object(collector, "_fetch", side_effect=fetch):
+            self.assertEqual(collector.poll(sources), [])
+
+        self.assertEqual(calls, ["x1", "ig1"])
+        self.assertEqual(set(collector._social_retry_after), {"x1", "x2", "x3"})
+
     def test_build_jobs_skips_disabled_collectors(self):
         from unittest.mock import patch
 
@@ -1575,6 +1601,10 @@ class ManifestValidationTests(unittest.TestCase):
         }
         self.assertEqual(env["CACHE_EXPIRE"], "120")
         self.assertEqual(env["REQUEST_RETRY"], "0")
+        self.assertEqual(
+            env["REQUEST_RATE_LIMITS"],
+            '{"www.instagram.com":{"points":1,"duration":2}}',
+        )
 
     def test_powershell_deploy_script_is_utf8_and_applies_social_hub(self):
         root = Path(__file__).resolve().parent.parent
