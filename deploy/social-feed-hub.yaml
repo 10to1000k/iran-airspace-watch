@@ -98,6 +98,9 @@ spec:
             # Trade cache freshness against upstream rate limits; 2-minute TTL.
             - name: CACHE_EXPIRE
               value: "120"
+            # Instagram 429 responses must not trigger RSSHub's automatic retries.
+            - name: REQUEST_RETRY
+              value: "0"
             - name: REDIS_URL
               value: redis://social-feed-redis:6379/
           envFrom:

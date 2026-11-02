@@ -1523,6 +1523,7 @@ class ManifestValidationTests(unittest.TestCase):
             for item in hub_deployment["spec"]["template"]["spec"]["containers"][0]["env"]
         }
         self.assertEqual(env["CACHE_EXPIRE"], "120")
+        self.assertEqual(env["REQUEST_RETRY"], "0")
 
     def test_powershell_deploy_script_is_utf8_and_applies_social_hub(self):
         root = Path(__file__).resolve().parent.parent
