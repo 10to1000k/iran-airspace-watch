@@ -559,6 +559,76 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(collector.poll([source]), [])
             fetch.assert_not_called()
 
+    def test_rsshub_empty_route_503_is_classified_from_response_body(self):
+        from unittest.mock import MagicMock, patch
+
+        from src.collectors import EmptyRssHubRoute, RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        response = MagicMock()
+        response.status_code = 503
+        response.__enter__.return_value = response
+        response.iter_content.return_value = [
+            b"<html>this route is empty, please check the original site</html>"
+        ]
+
+        with patch("src.collectors.requests.get", return_value=response):
+            with self.assertRaises(EmptyRssHubRoute):
+                collector._read_bounded(
+                    "http://social-feed-hub:1200/twitter/keyword/%23Empty"
+                )
+
+        response.raise_for_status.assert_not_called()
+
+    def test_empty_x_route_does_not_short_circuit_other_routes(self):
+        from unittest.mock import patch
+
+        from src.collectors import EmptyRssHubRoute, RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        sources = [
+            {"id": "x_empty", "url": "http://social-feed-hub:1200/twitter/keyword/%23Empty"},
+            {"id": "x_next", "url": "http://social-feed-hub:1200/twitter/keyword/%23Next"},
+            {"id": "ig_next", "url": "http://social-feed-hub:1200/instagram/tags/Next"},
+        ]
+        calls = []
+
+        def fetch(source):
+            calls.append(source["id"])
+            if source["id"] == "x_empty":
+                raise EmptyRssHubRoute("RSSHub route is empty (HTTP 503)")
+            return []
+
+        with patch.object(collector, "_fetch", side_effect=fetch):
+            self.assertEqual(collector.poll(sources), [])
+
+        self.assertEqual(calls, ["x_empty", "x_next", "ig_next"])
+        self.assertEqual(collector._social_retry_after, {})
+
+    def test_social_hashtag_routes_run_before_profile_routes(self):
+        from unittest.mock import patch
+
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        sources = [
+            {"id": "ig_profile", "url": "http://social-feed-hub:1200/instagram/user/example"},
+            {"id": "x_tag", "url": "http://social-feed-hub:1200/twitter/keyword/%23Test", "airport_hashtag_feed": True},
+            {"id": "ig_tag", "url": "http://social-feed-hub:1200/instagram/tags/Test", "airport_hashtag_feed": True},
+        ]
+        calls = []
+
+        def fetch(source):
+            calls.append(source["id"])
+            if source["id"] == "ig_profile":
+                raise RuntimeError("profile request failed")
+            return []
+
+        with patch.object(collector, "_fetch", side_effect=fetch):
+            self.assertEqual(collector.poll(sources), [])
+
+        self.assertEqual(calls, ["x_tag", "ig_tag", "ig_profile"])
+
     def test_first_instagram_failure_short_circuits_remaining_tags_in_cycle(self):
         from unittest.mock import patch
 
