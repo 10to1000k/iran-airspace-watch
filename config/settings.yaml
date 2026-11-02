@@ -130,6 +130,8 @@ notifications:
   loud_severities: [critical]
   silent_others: true
   include_feedback_buttons: true
+  # برای فیدهای هشتگی اجتماعی: حداکثر یک پست از هر شبکه در هر ساعت.
+  social_min_interval_seconds: 3600
 
 # سرور سلامت برای probeهای OpenShift. اگر حلقه‌ی اصلی، کالکتورها یا نخ تلگرام
 # قفل شوند، k8s خودش pod را ری‌استارت می‌کند.

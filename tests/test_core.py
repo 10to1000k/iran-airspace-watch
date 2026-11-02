@@ -1214,6 +1214,58 @@ class PipelineRecoveryTests(unittest.TestCase):
                 db.close()
 
 
+    def test_social_hashtag_posts_are_limited_per_network(self):
+        import tempfile
+
+        from src.db import Database
+        from src.pipeline import Pipeline
+
+        class CountingBot:
+            configured = True
+
+            def __init__(self):
+                self.sent = []
+
+            def recipients(self):
+                return ["111"]
+
+            def chat_id(self):
+                return "111"
+
+            def feedback_keyboard(self, event_id, url=""):
+                return []
+
+            def send(self, text, **kwargs):
+                self.sent.append(text)
+                return len(self.sent)
+
+        config = load_config(dry_run=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "social-rate-limit.db")
+            try:
+                bot = CountingBot()
+                pipeline = Pipeline(config, db, bot)
+
+                def event(event_id, source):
+                    return {
+                        "id": event_id,
+                        "title_fa": "خبر آزمایشی",
+                        "body_fa": "",
+                        "severity": "important",
+                        "primary_source": source,
+                        "primary_url": "https://example.com/news",
+                    }
+
+                self.assertTrue(pipeline._deliver_event(event(1, "X #IranAirspace")))
+                self.assertFalse(pipeline._deliver_event(event(2, "X #TehranFIR")))
+                self.assertTrue(
+                    pipeline._deliver_event(event(3, "Instagram #IranAirspace"))
+                )
+                self.assertEqual(len(bot.sent), 2)
+            finally:
+                db.close()
+
+
 class OffTopicGateTests(unittest.TestCase):
     def test_off_topic_event_is_stored_but_not_sent(self):
         import tempfile
