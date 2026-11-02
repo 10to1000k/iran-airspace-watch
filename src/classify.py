@@ -50,8 +50,11 @@ def _contains(text: str, keyword: str) -> bool:
     kw = util.normalize(keyword)
     if not kw:
         return False
-    if len(kw) <= 4 and kw.isascii():
-        return re.search(rf"\b{re.escape(kw)}\b", text) is not None
+    # Short Arabic-script keywords need token boundaries too. Without them,
+    # the Arabic word "رحلة" (flight) matches inside the Persian word "مرحله"
+    # (stage), causing unrelated Iranian stories to be classified as aviation.
+    if len(kw) <= 5 and (kw.isascii() or re.search(r"[\u0600-\u06FF]", kw)):
+        return re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", text) is not None
     return kw in text
 
 

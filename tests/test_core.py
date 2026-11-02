@@ -91,6 +91,20 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.category, "airspace")
         self.assertEqual(result.severity, "critical")
 
+    def test_mehr_bicycling_story_is_not_aviation_news(self):
+        """«مرحله» must not match the Arabic aviation keyword «رحلة»."""
+        result = self.classifier.classify(
+            self.item(
+                "قزوین میزبان مرحله پایانی لیگ برتر و لیگ جوانان دوچرخه‌سواری کشور شد",
+                "خبرگزاری مهر | اخبار ایران و جهان. قزوین میزبان مرحله پایانی لیگ برتر "
+                "و لیگ جوانان دوچرخه‌سواری کشور شد. این مسابقات از ۱۴ تا ۱۷ آبان‌ماه برگزار می‌شود.",
+                lang="fa",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+        self.assertFalse(result.publishable)
+
     def test_robbery_band_is_not_airport_news(self):
         """«باند سارقان» به معنی باند فرودگاه نیست و نباید خبر فرودگاهی شود."""
         result = self.classifier.classify(
