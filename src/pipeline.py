@@ -219,6 +219,15 @@ class Pipeline:
         chat_id = self.bot.chat_id() if hasattr(self.bot, "chat_id") else None
         return [str(chat_id)] if chat_id else []
 
+    @staticmethod
+    def _social_hashtag_network(event) -> str | None:
+        source = str(event["primary_source"] or "")
+        if source.startswith("X #"):
+            return "x"
+        if source.startswith("Instagram #"):
+            return "instagram"
+        return None
+
     def _deliver_event(self, event) -> bool:
         """ارسال رخداد به همه‌ی گیرنده‌ها. True فقط وقتی همه گرفته باشند.
 
@@ -247,6 +256,20 @@ class Pipeline:
             return False
 
         delivered = self.db.message_refs(event_id)
+        network = self._social_hashtag_network(event)
+        if network and not delivered:
+            interval = int(
+                self.cfg.get("notifications.social_min_interval_seconds", 3600)
+            )
+            if not self.db.claim_interval_slot(
+                f"social_post_last_sent_{network}", interval
+            ):
+                log.info(
+                    "سهم انتشار ساعتی شبکه %s پر است؛ رخداد %d برای نوبت بعد نگه داشته شد",
+                    network,
+                    event_id,
+                )
+                return False
         all_ok = True
         for chat_id in recipients:
             if chat_id in delivered:

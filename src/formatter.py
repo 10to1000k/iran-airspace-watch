@@ -101,47 +101,20 @@ def hashtags(event, limit: int = 5) -> str:
 
 
 def format_event(event, config) -> str:
-    severity = _get(event, "severity", "context")
-    category = _get(event, "category", "context")
+    """پیام خبر را به تیتر، زمان و منبع محدود کن؛ بدنه ممکن است نویز صفحه باشد."""
     title = _get(event, "title_fa") or "بدون تیتر"
-    body = util.truncate(
-        _get(event, "body_fa"), int(config.get("app.max_body_chars", 700))
-    )
-    confidence = _get(event, "confidence", "single")
     source = _get(event, "primary_source") or "نامشخص"
     url = _get(event, "primary_url") or ""
     when = _get(event, "first_seen")
 
     lines = [
-        f"{SEVERITY_ICON.get(severity, '⚪')} <b>{SEVERITY_LABEL.get(severity, 'خبر')}</b>"
-        f" | {CATEGORY_LABEL.get(category, 'خبر')}",
-        f"🕐 {util.format_moment(when)}",
-        "",
         f"<b>{html.escape(title)}</b>",
+        f"🕐 {util.format_moment(when)}",
+        f"📌 منبع: {html.escape(source)}",
     ]
-    if body:
-        lines += ["", html.escape(body)]
-
-    airlines = _split(_get(event, "airlines"))
-    if airlines:
-        lines += ["", "✈️ " + " — ".join(html.escape(a) for a in airlines)]
-
-    countries = [COUNTRY_LABEL.get(c, c) for c in _split(_get(event, "countries"))]
-    if countries:
-        lines.append("🌍 " + "، ".join(html.escape(c) for c in countries))
-
-    lines += ["", f"📌 منبع: {html.escape(source)}"]
     if url.startswith("http"):
-        lines.append(f'🔗 <a href="{html.escape(url)}">متن اصلی خبر</a>')
-
-    badge = CONFIDENCE_LABEL.get(confidence, "")
-    if badge:
-        lines.append(badge)
-    if not _get(event, "numbers_ok", 1):
-        lines.append("⚠️ اعداد این ترجمه نیازمند بازبینی است")
-
-    lines += ["", hashtags(event)]
-    return "\n".join(lines).strip()
+        lines.append(f'<a href="{html.escape(url)}">متن اصلی خبر</a>')
+    return "\n".join(lines)
 
 
 def format_update(event, source_name: str, note: str = "") -> str:

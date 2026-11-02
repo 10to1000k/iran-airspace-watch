@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from html.parser import HTMLParser
 
 import requests
@@ -24,6 +25,13 @@ USER_AGENT = (
 
 # سقف حجم دانلود (حفاظ رم/سوکت، مثل MAX_FEED_BYTES در collectors)
 MAX_ARTICLE_BYTES = 1_000_000
+
+# IRNA and some other publishers return a redirect interstitial as HTML. It is
+# not article text and must never replace a useful RSS summary.
+_REDIRECT_INTERSTITIALS = (
+    re.compile(r"^transferring\s+to\s+(?:the\s+)?website\b", re.IGNORECASE),
+    re.compile(r"^در\s*حال\s*انتقال\s*به\s*سایت\b"),
+)
 
 # تگ‌هایی که متن‌شان هرگز بخشی از مقاله نیست (اسکریپت، ناوبری، تبلیغ و ...)
 _SKIP_TAGS = {
@@ -86,7 +94,14 @@ def extract_article_text(html_text: str, max_chars: int) -> str:
         parser.close()
     except Exception:  # noqa: BLE001 — HTML خراب نباید کل چرخه را ببخشد
         log.debug("HTML مقاله تجزیه نشد")
-    return util.truncate(parser.text, max_chars)
+    text = parser.text
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and all(
+        any(pattern.search(line) for pattern in _REDIRECT_INTERSTITIALS)
+        for line in lines
+    ):
+        return ""
+    return util.truncate(text, max_chars)
 
 
 def fetch_article_text(

@@ -17,11 +17,11 @@ app:
 
 poll:
   rss_seconds: 75
-  # فیدهای هشتگی جداگانه و سریع‌تر از منابع خبری عمومی پایش شوند.
-  social_hashtag_seconds: 30
+  # ۲۵ هشتگ هر شبکه هر ساعت یک‌بار بررسی شوند؛ انتشار نیز برای هر شبکه ساعتی محدود است.
+  social_hashtag_seconds: 3600
   rss_workers: 6
-  # مسیرهای RSSHub را با concurrency پایین‌تر می‌خوانیم تا موج درخواست نسازند.
-  social_rss_workers: 2
+  # مسیرهای RSSHub ترتیبی خوانده شوند تا Instagram موج درخواست نگیرد.
+  social_rss_workers: 1
   # خطای upstream در مسیرهای اجتماعی تا ۱۵ دقیقه دوباره درخواست نمی‌شود.
   social_failure_cooldown_seconds: 900
   notam_seconds: 60
@@ -130,6 +130,8 @@ notifications:
   loud_severities: [critical]
   silent_others: true
   include_feedback_buttons: true
+  # برای فیدهای هشتگی اجتماعی: حداکثر یک پست از هر شبکه در هر ساعت.
+  social_min_interval_seconds: 3600
 
 # سرور سلامت برای probeهای OpenShift. اگر حلقه‌ی اصلی، کالکتورها یا نخ تلگرام
 # قفل شوند، k8s خودش pod را ری‌استارت می‌کند.
@@ -178,13 +180,12 @@ relevance:
     - aircraft
     - aviation
     - overflight
-    - passenger
+    # «passenger/مسافر» به‌تنهایی نشانه‌ی هوانوردی نیست (مثلاً ترافیک جاده‌ای).
     - پرواز
     - هواپیمایی
     - هواپیما
     - فرودگاه
     - حریم هوایی
-    - مسافر
     - uçuş
     - havayolu
     - havalimanı

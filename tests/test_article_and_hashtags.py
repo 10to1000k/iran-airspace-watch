@@ -72,6 +72,15 @@ class ArticleTextTests(unittest.TestCase):
         self.assertLessEqual(len(text), 101)
         self.assertTrue(text)
 
+    def test_redirect_interstitial_is_not_article_text(self):
+        from src.article import extract_article_text
+
+        html = (
+            "<html><body><p>Transferring to the website...</p>"
+            "<p>در حال انتقال به سایت مورد نظر هستید...</p></body></html>"
+        )
+        self.assertEqual(extract_article_text(html, max_chars=1000), "")
+
     def test_broken_html_does_not_raise(self):
         from src.article import extract_article_text
 
@@ -425,7 +434,7 @@ class HashtagMonitoringTests(unittest.TestCase):
         self.assertTrue(all(s.get("enabled") for s in hashtag_feeds))
         self.assertTrue(all(s.get("airport_hashtag_feed") for s in hashtag_feeds))
         self.assertTrue(all(s.get("max_items_per_feed") == 30 for s in hashtag_feeds))
-        self.assertEqual(config.get("poll.social_hashtag_seconds"), 30)
+        self.assertEqual(config.get("poll.social_hashtag_seconds"), 3600)
         self.assertLessEqual(len(config.get("hashtags.watchlist", [])), 30)
 
     def test_airport_hashtag_feed_bypasses_keyword_thresholds_and_vetoes(self):

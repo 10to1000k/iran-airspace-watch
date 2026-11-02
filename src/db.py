@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from . import util
@@ -147,6 +148,26 @@ class Database:
         with self._lock:
             self.conn.execute("DELETE FROM kv WHERE key=?", (key,))
             self.conn.commit()
+
+    def claim_interval_slot(
+        self, key: str, interval_seconds: int, now: datetime | None = None
+    ) -> bool:
+        """Atomically reserve one action per interval; survives process restarts."""
+        now = now or util.now_utc()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT value FROM kv WHERE key=?", (key,)
+            ).fetchone()
+            previous = util.parse_iso(row["value"]) if row else None
+            if previous and (now - previous).total_seconds() < max(0, interval_seconds):
+                return False
+            self.conn.execute(
+                "INSERT INTO kv(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, util.iso(now)),
+            )
+            self.conn.commit()
+            return True
 
     # ── items ────────────────────────────────────────────────
     def item_seen(self, source_id: str, fp: str) -> bool:

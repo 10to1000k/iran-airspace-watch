@@ -91,6 +91,47 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.category, "airspace")
         self.assertEqual(result.severity, "critical")
 
+    def test_mehr_bicycling_story_is_not_aviation_news(self):
+        """«مرحله» must not match the Arabic aviation keyword «رحلة»."""
+        result = self.classifier.classify(
+            self.item(
+                "قزوین میزبان مرحله پایانی لیگ برتر و لیگ جوانان دوچرخه‌سواری کشور شد",
+                "خبرگزاری مهر | اخبار ایران و جهان. قزوین میزبان مرحله پایانی لیگ برتر "
+                "و لیگ جوانان دوچرخه‌سواری کشور شد. این مسابقات از ۱۴ تا ۱۷ آبان‌ماه برگزار می‌شود.",
+                lang="fa",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+        self.assertFalse(result.publishable)
+
+    def test_threat_in_a_stage_headline_is_not_an_airline_alert(self):
+        """Arabic رحلة must not match مرحلة; a body-only plane mention is not an alert."""
+        result = self.classifier.classify(
+            self.item(
+                "ترامب: سنضطر إلى توجيه ضربة قاصمة لإيران في مرحلة ما",
+                "رئیس‌جمهور آمریکا گفت بیشتر هواپیماها و کشتی‌های ایران نابود شده‌اند؛ "
+                "در مقطعی ناچار به وارد کردن ضربه‌ای قاطع به ایران هستیم.",
+                lang="ar",
+                country="TR",
+            )
+        )
+        self.assertNotEqual(result.category, "airline")
+        self.assertFalse(result.publishable)
+
+    def test_chalus_road_traffic_story_is_not_aviation_news(self):
+        """«مسافر» و اشاره به تهران، به‌تنهایی خبر جاده‌ای را هوانوردی نمی‌کند."""
+        result = self.classifier.classify(
+            self.item(
+                "سیل مسافران و بن‌بست ترافیکی چالوس؛ بازنگری مهندسی آزادراه تهران‌شمال است",
+                "Transferring to the website... در حال انتقال به سایت مورد نظر هستید...",
+                lang="fa",
+                country="IR",
+            )
+        )
+        self.assertFalse(result.relevant)
+        self.assertFalse(result.publishable)
+
     def test_robbery_band_is_not_airport_news(self):
         """«باند سارقان» به معنی باند فرودگاه نیست و نباید خبر فرودگاهی شود."""
         result = self.classifier.classify(
@@ -524,13 +565,13 @@ class CollectorTests(unittest.TestCase):
 
         config = load_config(dry_run=True)
         jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
-        # فید هشتگی فعال، در چرخه‌ای مستقل و سریع‌تر از RSS عمومی اجرا می‌شود.
+        # فید هشتگی در چرخه‌ای مستقل و ساعتی اجرا می‌شود.
         self.assertEqual(
             [job.name for job in jobs], ["rss", "social_hashtags", "gdelt"]
         )
         by_name = {job.name: job for job in jobs}
         self.assertEqual(by_name["rss"].interval, 75)
-        self.assertEqual(by_name["social_hashtags"].interval, 30)
+        self.assertEqual(by_name["social_hashtags"].interval, 3600)
 
     def test_gdelt_articles_become_items(self):
         from src.collectors import GdeltCollector
@@ -1083,7 +1124,7 @@ class ChatAboutNewsTests(unittest.TestCase):
 
 
 class FormatterTests(unittest.TestCase):
-    def test_format_contains_source_and_badge(self):
+    def test_format_contains_only_title_time_source_and_link(self):
         from src.formatter import format_publication_notice
 
         config = load_config()
@@ -1091,7 +1132,7 @@ class FormatterTests(unittest.TestCase):
             "severity": "critical",
             "category": "airspace",
             "title_fa": "بستن حریم هوایی",
-            "body_fa": "متن خبر",
+            "body_fa": "متن خبر و تلگرام سروش اینستاگرام توییتر",
             "confidence": "multi",
             "numbers_ok": 1,
             "primary_source": "Anadolu Ajansı",
@@ -1099,15 +1140,15 @@ class FormatterTests(unittest.TestCase):
             "first_seen": util.iso(util.now_utc()),
             "airlines": "Turkish Airlines",
             "countries": "IR,TR,PK,TH,VN",
+            "extra": {"hashtags": ["#noise"]},
         }
         text = format_event(event, config)
-        self.assertIn("🔴", text)
+        self.assertIn("بستن حریم هوایی", text)
+        self.assertIn("🕐", text)
         self.assertIn("Anadolu Ajansı", text)
-        self.assertIn("✅", text)
-        self.assertIn("پاکستان", text)
-        self.assertIn("تایلند", text)
-        self.assertIn("ویتنام", text)
         self.assertIn("https://example.com/a", text)
+        for noise in ("متن خبر", "تلگرام", "سروش", "اینستاگرام", "توییتر", "Turkish Airlines", "پاکستان", "#noise", "🔴", "✅"):
+            self.assertNotIn(noise, text)
         self.assertLess(len(text), 4096)
 
         notice = format_publication_notice(event)
@@ -1169,6 +1210,58 @@ class PipelineRecoveryTests(unittest.TestCase):
                 sent = pipeline.flush_unsent()
                 self.assertEqual(sent, 1)
                 self.assertEqual(len(db.unsent_events()), 0)
+            finally:
+                db.close()
+
+
+    def test_social_hashtag_posts_are_limited_per_network(self):
+        import tempfile
+
+        from src.db import Database
+        from src.pipeline import Pipeline
+
+        class CountingBot:
+            configured = True
+
+            def __init__(self):
+                self.sent = []
+
+            def recipients(self):
+                return ["111"]
+
+            def chat_id(self):
+                return "111"
+
+            def feedback_keyboard(self, event_id, url=""):
+                return []
+
+            def send(self, text, **kwargs):
+                self.sent.append(text)
+                return len(self.sent)
+
+        config = load_config(dry_run=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "social-rate-limit.db")
+            try:
+                bot = CountingBot()
+                pipeline = Pipeline(config, db, bot)
+
+                def event(event_id, source):
+                    return {
+                        "id": event_id,
+                        "title_fa": "خبر آزمایشی",
+                        "body_fa": "",
+                        "severity": "important",
+                        "primary_source": source,
+                        "primary_url": "https://example.com/news",
+                    }
+
+                self.assertTrue(pipeline._deliver_event(event(1, "X #IranAirspace")))
+                self.assertFalse(pipeline._deliver_event(event(2, "X #TehranFIR")))
+                self.assertTrue(
+                    pipeline._deliver_event(event(3, "Instagram #IranAirspace"))
+                )
+                self.assertEqual(len(bot.sent), 2)
             finally:
                 db.close()
 
