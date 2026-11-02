@@ -559,9 +559,39 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(collector.poll([source]), [])
             fetch.assert_not_called()
 
+    def test_first_instagram_failure_short_circuits_remaining_tags_in_cycle(self):
+        from unittest.mock import patch
+
+        from src.collectors import RssCollector
+
+        collector = RssCollector(load_config(), db=None)
+        sources = [
+            {"id": "ig1", "url": "http://social-feed-hub:1200/instagram/tags/One"},
+            {"id": "x1", "url": "http://social-feed-hub:1200/twitter/keyword/%23One"},
+            {"id": "ig2", "url": "http://social-feed-hub:1200/instagram/tags/Two"},
+            {"id": "ig3", "url": "http://social-feed-hub:1200/instagram/tags/Three"},
+        ]
+        calls = []
+
+        def fetch(source):
+            calls.append(source["id"])
+            if source["id"] == "ig1":
+                raise RuntimeError("RSSHub returned 503 after Instagram 429")
+            return []
+
+        with patch.object(collector, "_fetch", side_effect=fetch):
+            self.assertEqual(collector.poll(sources), [])
+
+        self.assertEqual(calls, ["ig1", "x1"])
+        self.assertEqual(
+            set(collector._social_retry_after), {"ig1", "ig2", "ig3"}
+        )
+
     def test_build_jobs_skips_disabled_collectors(self):
+        from unittest.mock import patch
+
         from src.airlines import AirlineIndex
-        from src.collectors import build_jobs
+        from src.collectors import RssCollector, build_jobs
 
         config = load_config(dry_run=True)
         jobs = build_jobs(config, db=None, airline_index=AirlineIndex(config.airlines))
@@ -572,6 +602,15 @@ class CollectorTests(unittest.TestCase):
         by_name = {job.name: job for job in jobs}
         self.assertEqual(by_name["rss"].interval, 75)
         self.assertEqual(by_name["social_hashtags"].interval, 3600)
+        with patch.object(RssCollector, "poll", return_value=[]) as poll:
+            by_name["rss"].fn()
+            regular_ids = {s["id"] for s in poll.call_args.args[0]}
+            by_name["social_hashtags"].fn()
+            social_ids = {s["id"] for s in poll.call_args.args[0]}
+        self.assertIn("social_ig_anadolu", social_ids)
+        self.assertIn("social_x_anadolu", social_ids)
+        self.assertNotIn("social_ig_anadolu", regular_ids)
+        self.assertNotIn("social_x_anadolu", regular_ids)
 
     def test_gdelt_articles_become_items(self):
         from src.collectors import GdeltCollector
@@ -1245,6 +1284,18 @@ class PipelineRecoveryTests(unittest.TestCase):
             try:
                 bot = CountingBot()
                 pipeline = Pipeline(config, db, bot)
+                self.assertEqual(
+                    pipeline._social_hashtag_network(
+                        {"primary_source": "Anadolu Agency (Instagram)"}
+                    ),
+                    "instagram",
+                )
+                self.assertEqual(
+                    pipeline._social_hashtag_network(
+                        {"primary_source": "Anadolu Agency (X)"}
+                    ),
+                    "x",
+                )
 
                 def event(event_id, source):
                     return {

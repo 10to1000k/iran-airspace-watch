@@ -35,6 +35,7 @@ MAX_FEED_BYTES = (
     2 * 1024 * 1024
 )  # سقف ۲ مگابایت برای جلوگیری از مصرف بی‌حد رم یا قفل شدن سوکت
 BARE_INDEX_PATHS = {"", "/", "/blog", "/news", "/feed", "/rss"}
+_SOCIAL_CYCLE_SKIPPED = object()
 
 
 class RssCollector:
@@ -96,16 +97,33 @@ class RssCollector:
         is_social_batch = all(self._is_social_hub_source(s) for s in ready_sources)
         worker_limit = self.social_workers if is_social_batch else self.max_workers
         workers = min(worker_limit, len(ready_sources))
+        instagram_failed = threading.Event()
+
+        def fetch_source(source: dict):
+            # With the social batch configured to one worker, this check runs
+            # before each upstream route. The first failed Instagram request
+            # prevents the remaining hashtag routes from hitting RSSHub at all.
+            if self._social_hub_platform(source) == "instagram" and instagram_failed.is_set():
+                return _SOCIAL_CYCLE_SKIPPED
+            try:
+                return self._fetch(source)
+            except Exception:
+                if self._social_hub_platform(source) == "instagram":
+                    instagram_failed.set()
+                raise
+
         with ThreadPoolExecutor(
             max_workers=workers, thread_name_prefix="rss-worker"
         ) as pool:
             future_map = {
-                pool.submit(self._fetch, source): source for source in ready_sources
+                pool.submit(fetch_source, source): source for source in ready_sources
             }
             for future in as_completed(future_map):
                 source = future_map[future]
                 try:
                     fetched = future.result()
+                    if fetched is _SOCIAL_CYCLE_SKIPPED:
+                        continue
                     items.extend(fetched)
                     if self._is_social_hub_source(source):
                         with self._social_retry_lock:
@@ -114,18 +132,45 @@ class RssCollector:
                         self.db.mark_source_ok(source["id"])
                 except Exception as exc:  # noqa: BLE001
                     log.warning("فید %s خوانده نشد: %s", source.get("id"), exc)
-                    if self._is_social_hub_source(source) and self.social_failure_cooldown:
+                    platform = self._social_hub_platform(source)
+                    if platform and self.social_failure_cooldown:
+                        retry_at = time.monotonic() + self.social_failure_cooldown
                         with self._social_retry_lock:
-                            self._social_retry_after[source["id"]] = (
-                                time.monotonic() + self.social_failure_cooldown
+                            self._social_retry_after[source["id"]] = retry_at
+                            if platform == "instagram":
+                                # Trip the entire Instagram batch circuit, not
+                                # just this single tag, for the cooldown window.
+                                for candidate in sources:
+                                    if self._social_hub_platform(candidate) == "instagram":
+                                        self._social_retry_after[candidate["id"]] = retry_at
+                        if platform == "instagram":
+                            skipped = sum(
+                                self._social_hub_platform(candidate) == "instagram"
+                                and candidate["id"] != source["id"]
+                                for candidate in ready_sources
+                            )
+                            log.warning(
+                                "Instagram feed failed; short-circuiting up to %d remaining hashtag routes for this cycle",
+                                skipped,
                             )
                     if self.db:
                         self.db.mark_source_error(source["id"], str(exc))
         return items
 
     @staticmethod
-    def _is_social_hub_source(source: dict) -> bool:
-        return urlparse(str(source.get("url", ""))).hostname == "social-feed-hub"
+    def _social_hub_platform(source: dict) -> str | None:
+        parsed = urlparse(str(source.get("url", "")))
+        if parsed.hostname != "social-feed-hub":
+            return None
+        if parsed.path.startswith("/instagram/"):
+            return "instagram"
+        if parsed.path.startswith("/twitter/"):
+            return "x"
+        return None
+
+    @classmethod
+    def _is_social_hub_source(cls, source: dict) -> bool:
+        return cls._social_hub_platform(source) is not None
 
     def _read_bounded(
         self, url: str, timeout: tuple[float, float] = (8.0, 18.0)
@@ -682,11 +727,11 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     x = XCollector(config, airline_index)
     instagram = InstagramHashtagCollector(config)
 
-    hashtag_sources = [
-        source for source in config.rss_sources if source.get("airport_hashtag_feed")
+    social_sources = [
+        source for source in config.rss_sources if RssCollector._is_social_hub_source(source)
     ]
     regular_sources = [
-        source for source in config.rss_sources if not source.get("airport_hashtag_feed")
+        source for source in config.rss_sources if not RssCollector._is_social_hub_source(source)
     ]
     jobs = [
         CollectorJob(
@@ -695,12 +740,12 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
             lambda: rss.poll(regular_sources),
         )
     ]
-    if hashtag_sources:
+    if social_sources:
         jobs.append(
             CollectorJob(
                 "social_hashtags",
-                int(config.get("poll.social_hashtag_seconds", 30)),
-                lambda: rss.poll(hashtag_sources),
+                int(config.get("poll.social_hashtag_seconds", 3600)),
+                lambda: rss.poll(social_sources),
             )
         )
     # فقط کالکتورهایی که واقعاً فعال‌اند زمان‌بندی می‌شوند تا نخ بیکار نسازند
