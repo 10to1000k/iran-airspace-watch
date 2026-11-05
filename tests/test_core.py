@@ -71,6 +71,22 @@ class ClassifierTests(unittest.TestCase):
         cls.config = load_config()
         cls.classifier = Classifier(cls.config)
 
+        # حالت بازتر (حجم بیشتر): include_iran_conflict_context پیش‌فرض روشن است.
+        # تست‌های سخت‌گیرانه باید روی strict بررسی شوند، نه روی دیفالت باز.
+        import copy
+
+        from src.config import Config
+
+        strict_settings = copy.deepcopy(cls.config.settings)
+        strict_settings["relevance"]["include_iran_conflict_context"] = False
+        cls.strict_config = Config(
+            settings=strict_settings,
+            sources=cls.config.sources,
+            airlines=cls.config.airlines,
+            glossary=cls.config.glossary,
+        )
+        cls.strict_classifier = Classifier(cls.strict_config)
+
     def item(self, title: str, body: str = "", lang: str = "en", country: str = "INTL"):
         return RawItem(
             source_id="t",
@@ -285,7 +301,7 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result.relevant)
 
     def test_iran_air_force_budget_story_is_irrelevant(self):
-        result = self.classifier.classify(
+        result = self.strict_classifier.classify(
             self.item(
                 "Iran parliamentary commission reviews plan to expand Air Force capabilities",
                 "The committee discussed the air force budget and military procurement.",
@@ -295,7 +311,7 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result.relevant)
 
     def test_foreign_airport_attack_with_iran_mention_is_irrelevant(self):
-        result = self.classifier.classify(
+        result = self.strict_classifier.classify(
             self.item(
                 "Drone attack on Riyadh airport: Iran-backed Houthis claim responsibility",
                 "Flights were briefly suspended at King Khalid International Airport. "
@@ -379,7 +395,8 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result.relevant)
 
     def test_conflict_context_is_off_by_default(self):
-        result = self.classifier.classify(
+        # این تست روی strict چک می‌کند؛ دیفالت فعلی (بازتر) روشن است.
+        result = self.strict_classifier.classify(
             self.item(
                 "Iran warns of stronger response to any new attack", "military drills"
             )

@@ -334,7 +334,9 @@ relevance:
 
   # اگر true شود، خبرهای «ایران + جنگ/حمله/موشک/تحریم» هم به‌عنوان «زمینه»
   # منتشر می‌شوند. پیش‌فرض خاموش است، چون حجمشان زیاد و ربطشان غیرمستقیم است.
-  include_iran_conflict_context: false
+  # تنظیم بازتر (حجم بیشتر، نویز بیشتر): فعال شد — این تنظیم را روی GitHub Actions
+  # و در تولید باز می‌کند. تست‌های سخت‌گیرانه باید صراحتاً strict تنظیم کنند.
+  include_iran_conflict_context: true
   conflict_keywords:
     - war
     - strike

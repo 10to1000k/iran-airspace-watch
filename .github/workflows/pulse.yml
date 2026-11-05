@@ -113,3 +113,23 @@ jobs:
             git commit -m "state: watch.db"
           fi
           git push --force origin state
+
+      - name: Healthchecks ping (dead-man switch)
+        if: always()
+        env:
+          HC_UUID: ${{ secrets.HEALTHCHECKS_UUID }}
+          # fallback: از Variable هم می‌آید تا بدون Secret هم کار کند
+          HC_UUID_VAR: ${{ vars.HEALTHCHECKS_UUID }}
+        run: |
+          set -e
+          uuid="${HC_UUID:-$HC_UUID_VAR}"
+          if [ -z "$uuid" ]; then
+            echo "HEALTHCHECKS_UUID not set; skipping ping (create a free check at healthchecks.io, period 15m, grace 10m)"
+            exit 0
+          fi
+          # /<uuid> = نجاح، /<uuid>/fail = شکست — healthchecks.io رایگان است.
+          if [ "${{ job.status }}" = "success" ]; then
+            curl -fsS "https://hc-ping.com/$uuid" || true
+          else
+            curl -fsS "https://hc-ping.com/$uuid/fail" || true
+          fi
