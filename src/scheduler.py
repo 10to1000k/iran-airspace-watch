@@ -54,9 +54,12 @@ def _install_signal_handlers(stop: threading.Event) -> None:
 def run_forever(config, db, bot) -> None:
     index = AirlineIndex(config.airlines)
     stale_seconds = int(config.get("health.stale_seconds", 300))
+    publish_deadline = int(config.get("health.publish_deadline_seconds", 0))
     retention_days = int(config.get("app.retention_days", 30))
 
-    health = HealthState(stale_seconds=stale_seconds)
+    health = HealthState(
+        stale_seconds=stale_seconds, publish_deadline_seconds=publish_deadline
+    )
     pipeline = Pipeline(config, db, bot, health=health)
     bot.bind_health(health)
     bot.on_recipient_ready(pipeline.flush_unsent)

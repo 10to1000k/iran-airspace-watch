@@ -417,8 +417,8 @@ class ClassifierTests(unittest.TestCase):
                 "and passenger terminal were discussed at the trade fair.",
             )
         )
-        self.assertTrue(result.relevant)       # ثبت می‌شود
-        self.assertFalse(result.publishable)   # ولی برای کاربر نمی‌رود
+        self.assertTrue(result.relevant)  # ثبت می‌شود
+        self.assertFalse(result.publishable)  # ولی برای کاربر نمی‌رود
 
     def test_airline_livery_with_incidental_iran_is_not_publishable(self):
         result = self.classifier.classify(
@@ -552,7 +552,9 @@ class CollectorTests(unittest.TestCase):
             "id": "social_ig_tag_test",
             "url": "http://social-feed-hub:1200/instagram/tags/Test",
         }
-        with patch.object(collector, "_fetch", side_effect=RuntimeError("upstream 503")) as fetch:
+        with patch.object(
+            collector, "_fetch", side_effect=RuntimeError("upstream 503")
+        ) as fetch:
             self.assertEqual(collector.poll([source]), [])
             fetch.assert_called_once_with(source)
         with patch.object(collector, "_fetch") as fetch:
@@ -587,8 +589,14 @@ class CollectorTests(unittest.TestCase):
 
         collector = RssCollector(load_config(), db=None)
         sources = [
-            {"id": "x_empty", "url": "http://social-feed-hub:1200/twitter/keyword/%23Empty"},
-            {"id": "x_next", "url": "http://social-feed-hub:1200/twitter/keyword/%23Next"},
+            {
+                "id": "x_empty",
+                "url": "http://social-feed-hub:1200/twitter/keyword/%23Empty",
+            },
+            {
+                "id": "x_next",
+                "url": "http://social-feed-hub:1200/twitter/keyword/%23Next",
+            },
             {"id": "ig_next", "url": "http://social-feed-hub:1200/instagram/tags/Next"},
         ]
         calls = []
@@ -612,9 +620,20 @@ class CollectorTests(unittest.TestCase):
 
         collector = RssCollector(load_config(), db=None)
         sources = [
-            {"id": "ig_profile", "url": "http://social-feed-hub:1200/instagram/user/example"},
-            {"id": "x_tag", "url": "http://social-feed-hub:1200/twitter/keyword/%23Test", "airport_hashtag_feed": True},
-            {"id": "ig_tag", "url": "http://social-feed-hub:1200/instagram/tags/Test", "airport_hashtag_feed": True},
+            {
+                "id": "ig_profile",
+                "url": "http://social-feed-hub:1200/instagram/user/example",
+            },
+            {
+                "id": "x_tag",
+                "url": "http://social-feed-hub:1200/twitter/keyword/%23Test",
+                "airport_hashtag_feed": True,
+            },
+            {
+                "id": "ig_tag",
+                "url": "http://social-feed-hub:1200/instagram/tags/Test",
+                "airport_hashtag_feed": True,
+            },
         ]
         calls = []
 
@@ -652,10 +671,9 @@ class CollectorTests(unittest.TestCase):
         with patch.object(collector, "_fetch", side_effect=fetch):
             self.assertEqual(collector.poll(sources), [])
 
+        # فقط 429 مدارِ پلتفرم را در همین سیکل می‌اندازد؛ cooldown فقط روت خراب است.
         self.assertEqual(calls, ["ig1", "x1"])
-        self.assertEqual(
-            set(collector._social_retry_after), {"ig1", "ig2", "ig3"}
-        )
+        self.assertEqual(set(collector._social_retry_after), {"ig1"})
 
     def test_first_x_failure_short_circuits_remaining_routes_in_cycle(self):
         from unittest.mock import patch
@@ -674,14 +692,16 @@ class CollectorTests(unittest.TestCase):
         def fetch(source):
             calls.append(source["id"])
             if source["id"] == "x1":
+                # خطای عادی (بدون 429) فقط همان روت را cooldown می‌کند و نباید
+                # ۲۴ هشتگ دیگر را یک ساعت کُند کند (علت سکوت ۹ ساعته).
                 raise RuntimeError("RSSHub returned 503 for X")
             return []
 
         with patch.object(collector, "_fetch", side_effect=fetch):
             self.assertEqual(collector.poll(sources), [])
 
-        self.assertEqual(calls, ["x1", "ig1"])
-        self.assertEqual(set(collector._social_retry_after), {"x1", "x2", "x3"})
+        self.assertEqual(calls, ["x1", "ig1", "x2", "x3"])
+        self.assertEqual(set(collector._social_retry_after), {"x1"})
 
     def test_build_jobs_skips_disabled_collectors(self):
         from unittest.mock import patch
@@ -714,19 +734,25 @@ class CollectorTests(unittest.TestCase):
         from src.collectors import GdeltCollector
 
         collector = GdeltCollector(load_config())
-        items = collector._to_items({
-            "articles": [
-                {
-                    "url": "https://example.com/a1",
-                    "title": "Iran closes airspace over Tehran",
-                    "domain": "example.com",
-                    "language": "English",
-                    "seendate": "20261026T120000Z",
-                },
-                {"url": "https://example.com/a1", "title": "duplicate", "domain": "example.com"},
-                {"url": "", "title": "no url", "domain": "x"},
-            ]
-        })
+        items = collector._to_items(
+            {
+                "articles": [
+                    {
+                        "url": "https://example.com/a1",
+                        "title": "Iran closes airspace over Tehran",
+                        "domain": "example.com",
+                        "language": "English",
+                        "seendate": "20261026T120000Z",
+                    },
+                    {
+                        "url": "https://example.com/a1",
+                        "title": "duplicate",
+                        "domain": "example.com",
+                    },
+                    {"url": "", "title": "no url", "domain": "x"},
+                ]
+            }
+        )
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].kind, "gdelt")
         self.assertEqual(items[0].source_id, "gdelt_example_com")
@@ -953,8 +979,9 @@ class TranslatorTests(unittest.TestCase):
         self.assertTrue(any("generativelanguage" in u for u, _ in calls))
         self.assertTrue(any("groq.com" in u for u, _ in calls))
         # هر سرویس با کلید خودش صدا زده شده
-        self.assertIn(("https://api.groq.com/openai/v1/chat/completions",
-                       "Bearer gq-key"), calls)
+        self.assertIn(
+            ("https://api.groq.com/openai/v1/chat/completions", "Bearer gq-key"), calls
+        )
 
     def test_bad_key_skips_whole_provider_without_retry(self):
         from unittest import mock
@@ -1147,21 +1174,23 @@ class ChatAboutNewsTests(unittest.TestCase):
         from src.telegram_bot import TelegramBot
 
         db = Database(Path(tmp) / "test.db")
-        event_id, _ = db.create_event({
-            "fingerprint": "chat-test-1",
-            "tokens": {"tehran"},
-            "entity_key": "",
-            "category": "airspace",
-            "severity": "critical",
-            "countries": ["IR"],
-            "airlines": [],
-            "title_fa": "بسته‌شدن حریم هوایی تهران",
-            "body_fa": "حریم هوایی تهران موقتاً بسته شد.",
-            "confidence": "single",
-            "numbers_ok": 1,
-            "primary_url": "https://example.com/n1",
-            "primary_source": "Example",
-        })
+        event_id, _ = db.create_event(
+            {
+                "fingerprint": "chat-test-1",
+                "tokens": {"tehran"},
+                "entity_key": "",
+                "category": "airspace",
+                "severity": "critical",
+                "countries": ["IR"],
+                "airlines": [],
+                "title_fa": "بسته‌شدن حریم هوایی تهران",
+                "body_fa": "حریم هوایی تهران موقتاً بسته شد.",
+                "confidence": "single",
+                "numbers_ok": 1,
+                "primary_url": "https://example.com/n1",
+                "primary_source": "Example",
+            }
+        )
         bot = TelegramBot(load_config(), db)
         sent = []
         bot.send = lambda text, chat_id=None, **kw: sent.append((chat_id, text)) or 1
@@ -1175,7 +1204,9 @@ class ChatAboutNewsTests(unittest.TestCase):
             try:
                 rows = bot.feedback_keyboard(event_id, "https://example.com/n1")
                 flat = [btn for row in rows for btn in row]
-                self.assertTrue(any(b.get("callback_data") == f"ask:{event_id}" for b in flat))
+                self.assertTrue(
+                    any(b.get("callback_data") == f"ask:{event_id}" for b in flat)
+                )
                 self.assertTrue(any("گفت‌وگو" in b.get("text", "") for b in flat))
             finally:
                 db.close()
@@ -1195,12 +1226,14 @@ class ChatAboutNewsTests(unittest.TestCase):
                     return "پاسخ تستی درباره‌ی خبر"
 
                 bot.set_chat_responder(responder)
-                bot._handle_callback({
-                    "id": "cb1",
-                    "data": f"ask:{event_id}",
-                    "from": {"id": 555},
-                    "message": {"chat": {"id": 111}},
-                })
+                bot._handle_callback(
+                    {
+                        "id": "cb1",
+                        "data": f"ask:{event_id}",
+                        "from": {"id": 555},
+                        "message": {"chat": {"id": 111}},
+                    }
+                )
                 self.assertEqual(bot._active_chat_event("111"), event_id)
 
                 bot._handle_update(
@@ -1284,7 +1317,18 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("🕐", text)
         self.assertIn("Anadolu Ajansı", text)
         self.assertIn("https://example.com/a", text)
-        for noise in ("متن خبر", "تلگرام", "سروش", "اینستاگرام", "توییتر", "Turkish Airlines", "پاکستان", "#noise", "🔴", "✅"):
+        for noise in (
+            "متن خبر",
+            "تلگرام",
+            "سروش",
+            "اینستاگرام",
+            "توییتر",
+            "Turkish Airlines",
+            "پاکستان",
+            "#noise",
+            "🔴",
+            "✅",
+        ):
             self.assertNotIn(noise, text)
         self.assertLess(len(text), 4096)
 
@@ -1302,9 +1346,7 @@ class PipelineRecoveryTests(unittest.TestCase):
 
         config = load_config(dry_run=False)
         # متن کامل مقاله در تست شبکه نمی‌گیرد
-        config.settings.setdefault("poll", {})[
-            "fetch_full_article"
-        ] = False
+        config.settings.setdefault("poll", {})["fetch_full_article"] = False
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "test.db")
             try:
@@ -1349,7 +1391,6 @@ class PipelineRecoveryTests(unittest.TestCase):
                 self.assertEqual(len(db.unsent_events()), 0)
             finally:
                 db.close()
-
 
     def test_social_hashtag_posts_are_limited_per_network(self):
         import tempfile
@@ -1669,7 +1710,9 @@ class ManifestValidationTests(unittest.TestCase):
         )
         env = {
             item["name"]: item.get("value")
-            for item in hub_deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+            for item in hub_deployment["spec"]["template"]["spec"]["containers"][0][
+                "env"
+            ]
         }
         self.assertEqual(env["CACHE_EXPIRE"], "120")
         self.assertEqual(env["REQUEST_RETRY"], "0")

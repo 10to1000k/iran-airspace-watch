@@ -114,9 +114,10 @@ class RssCollector:
         }
 
         def fetch_source(source: dict):
-            # With the social batch configured to one worker, this check runs
-            # before each route. A failure prevents the rest of that platform's
-            # routes from hitting RSSHub in this cycle.
+            # مدار فقط برای ریت‌لیمیت (429) فعال می‌شود: وقتی آپ‌استریم صراحتاً
+            # می‌گوید «کند شو»، بقیه‌ی روت‌های همان پلتفرم در همین سیکل هم
+            # نباید خواسته شوند. خطای عادی یک روت (تایم‌اوت/خرابی تکی) فقط همان
+            # روت را cooldown می‌کند و نباید ۲۴ هشتگ دیگر را یک ساعت کُند کند.
             platform = self._social_hub_platform(source)
             if platform and platform_failed[platform].is_set():
                 return _SOCIAL_CYCLE_SKIPPED
@@ -125,8 +126,8 @@ class RssCollector:
             except EmptyRssHubRoute:
                 # An empty query is a normal route result, not a platform failure.
                 raise
-            except Exception:
-                if platform:
+            except Exception as exc:
+                if platform and self._is_rate_limit_error(exc):
                     platform_failed[platform].set()
                 raise
 
@@ -161,22 +162,15 @@ class RssCollector:
                     if platform and self.social_failure_cooldown:
                         retry_at = time.monotonic() + self.social_failure_cooldown
                         with self._social_retry_lock:
+                            # فقط همان روت خراب cooldown می‌شود، نه تمام پلتفرم.
+                            # (مدار کاملِ پلتفرم فقط برای 429 است و در fetch_source
+                            # در سطح سیکل اعمال می‌شود؛ نه برای ۱۵ دقیقه تا یک ساعت.)
                             self._social_retry_after[source["id"]] = retry_at
-                            # Trip this entire platform circuit, not just one
-                            # route, for the cooldown window.
-                            for candidate in sources:
-                                if self._social_hub_platform(candidate) == platform:
-                                    self._social_retry_after[candidate["id"]] = retry_at
-                        skipped = sum(
-                            self._social_hub_platform(candidate) == platform
-                            and candidate["id"] != source["id"]
-                            for candidate in ready_sources
-                        )
-                        log.warning(
-                            "%s feed failed; short-circuiting up to %d remaining routes for this cycle",
-                            platform,
-                            skipped,
-                        )
+                        if self._is_rate_limit_error(exc):
+                            log.warning(
+                                "%s rate-limited; short-circuiting remaining routes in this cycle only",
+                                platform,
+                            )
                     if self.db:
                         self.db.mark_source_error(source["id"], str(exc))
         return items
@@ -195,6 +189,20 @@ class RssCollector:
     @classmethod
     def _is_social_hub_source(cls, source: dict) -> bool:
         return cls._social_hub_platform(source) is not None
+
+    @staticmethod
+    def _is_rate_limit_error(exc: BaseException) -> bool:
+        """فقط ریت‌لیمیتِ واقعی (429) مدارِ پلتفرم را می‌اندازد.
+
+        خطای ۵۰۳‌ی RSSHub برای «روت خالی» قبلاً جدا شده است (EmptyRssHubRoute)
+        و نباید قاطی شود؛ همین‌طور تایم‌اوت/۵۰۰‌ی تکی یک تگ نباید بقیه را
+        پشتش کُند کند.
+        """
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 429:
+            return True
+        msg = str(exc).lower()
+        return "429" in msg or "too many requests" in msg or "rate limit" in msg
 
     def _read_bounded(
         self, url: str, timeout: tuple[float, float] = (8.0, 18.0)
@@ -260,10 +268,12 @@ class RssCollector:
             # may mention tags in article text; those must not become social tags.
             hashtags = []
             if self._is_social_hub_source(source):
-                hashtags = list(dict.fromkeys(
-                    [f"#{tag}" for tag in watched]
-                    + extract_hashtags(f"{title} {body}")
-                ))[:6]
+                hashtags = list(
+                    dict.fromkeys(
+                        [f"#{tag}" for tag in watched]
+                        + extract_hashtags(f"{title} {body}")
+                    )
+                )[:6]
             out.append(
                 RawItem(
                     source_id=source["id"],
@@ -282,7 +292,9 @@ class RssCollector:
                         # RSSHub hashtag routes are known topic signals even when
                         # the platform omits the searched tag from its feed text.
                         "watched_hashtags": watched,
-                        "airport_hashtag_feed": bool(source.get("airport_hashtag_feed", False)),
+                        "airport_hashtag_feed": bool(
+                            source.get("airport_hashtag_feed", False)
+                        ),
                     },
                 )
             )
@@ -549,8 +561,12 @@ class GdeltCollector:
         "(airspace OR NOTAM OR airport OR flights OR airline OR aviation)"
     )
     _LANG_MAP = {
-        "English": "en", "Persian": "fa", "Russian": "ru",
-        "Chinese": "zh", "Turkish": "tr", "Arabic": "ar",
+        "English": "en",
+        "Persian": "fa",
+        "Russian": "ru",
+        "Chinese": "zh",
+        "Turkish": "tr",
+        "Arabic": "ar",
     }
 
     def __init__(self, config):
@@ -651,9 +667,7 @@ def watched_hashtags(text: str, watchlist: list[str]) -> list[str]:
     if not text or not watchlist:
         return []
     present = {util.normalize(tag.lstrip("#")) for tag in extract_hashtags(text)}
-    return [
-        tag for tag in watchlist if util.normalize(tag.lstrip("#")) in present
-    ]
+    return [tag for tag in watchlist if util.normalize(tag.lstrip("#")) in present]
 
 
 class InstagramHashtagCollector:
@@ -691,9 +705,7 @@ class InstagramHashtagCollector:
                 log.debug("هشتگ اینستاگرام #%s خوانده نشد: %s", tag, exc)
                 posts = []
             for post in posts:
-                when = (
-                    post.date_utc.astimezone(timezone.utc) if post.date_utc else None
-                )
+                when = post.date_utc.astimezone(timezone.utc) if post.date_utc else None
                 if when and when < cutoff:
                     continue
                 caption = (post.caption or "").strip()
@@ -770,10 +782,14 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
     instagram = InstagramHashtagCollector(config)
 
     social_sources = [
-        source for source in config.rss_sources if RssCollector._is_social_hub_source(source)
+        source
+        for source in config.rss_sources
+        if RssCollector._is_social_hub_source(source)
     ]
     regular_sources = [
-        source for source in config.rss_sources if not RssCollector._is_social_hub_source(source)
+        source
+        for source in config.rss_sources
+        if not RssCollector._is_social_hub_source(source)
     ]
     jobs = [
         CollectorJob(

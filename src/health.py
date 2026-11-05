@@ -19,8 +19,12 @@ log = logging.getLogger(__name__)
 
 
 class HealthState:
-    def __init__(self, stale_seconds: int = 300):
+    def __init__(self, stale_seconds: int = 300, publish_deadline_seconds: int = 0):
         self.stale_seconds = stale_seconds
+        # 0 = غیرفعال؛ اگر >0 و نگذشتنِ این مدت از آخرین انتشار در حالی که
+        # کالکتورها زنده‌اند (=سکوت واقعی، نه نبود خبر)، stale اعلام می‌شود.
+        # پیش‌فرض ۰ یعنی خاموش تا به‌خاطر کمبود خبر دچار حلقه‌ی ری‌استارت نشود.
+        self.publish_deadline_seconds = int(publish_deadline_seconds or 0)
         self.started = time.time()
         self._last_touch = time.monotonic()
         self._polls: dict[str, float] = {}
@@ -28,6 +32,9 @@ class HealthState:
         self._max_silence: dict[str, float] = {}
         self._checks: dict[str, Callable[[], bool]] = {}
         self._published = 0
+        self._translation_failures = 0
+        self._last_publish_mono: float | None = None
+        self._last_publish_wall: float | None = None
         self._lock = threading.Lock()
 
     # ── ثبت سرویس‌های حیاتی ───────────────────────────────────
@@ -57,6 +64,21 @@ class HealthState:
         with self._lock:
             self._published += 1
             self._last_touch = time.monotonic()
+            self._last_publish_mono = time.monotonic()
+            self._last_publish_wall = time.time()
+
+    def mark_translation_failure(self) -> None:
+        with self._lock:
+            self._translation_failures += 1
+            # ضربان را پر نکن: شکست ترجمه نباید پاد را سالم نشان دهد —
+            # وگرنه سکوت ۹ ساعته‌ی LLM پنهان می‌ماند.
+
+    def seconds_since_publish(self) -> float | None:
+        with self._lock:
+            last = self._last_publish_mono
+            if last is None:
+                return None
+            return time.monotonic() - last
 
     # ── وضعیت ────────────────────────────────────────────────
     def age(self) -> float:
@@ -71,6 +93,8 @@ class HealthState:
             poll_mono = dict(self._poll_mono)
             max_silence = dict(self._max_silence)
             checks = dict(self._checks)
+            last_publish = self._last_publish_mono
+            publish_deadline = self.publish_deadline_seconds
 
         reasons: list[str] = []
         if age >= self.stale_seconds:
@@ -80,6 +104,27 @@ class HealthState:
             since = now_mono - poll_mono.get(name, now_mono)
             if since >= limit:
                 reasons.append(f"poll-stale:{name}:{round(since, 1)}s")
+
+        # سکوت انتشار در حالی که کالکتورها زنده‌اند: یعنی پولینگ می‌چرخد ولی
+        # هیچ‌چیز به تلگرام نمی‌رسد (ترجمه، گیرنده، دِداپ یا سهمیه‌ی ساعتی).
+        if publish_deadline > 0:
+            polls_fresh = (
+                all(
+                    (now_mono - poll_mono.get(name, now_mono))
+                    < max_silence.get(name, publish_deadline)
+                    for name in max_silence
+                )
+                if max_silence
+                else False
+            )
+            if polls_fresh:
+                since_publish = (
+                    now_mono - last_publish
+                    if last_publish is not None
+                    else now_mono - self.started
+                )
+                if since_publish >= publish_deadline:
+                    reasons.append(f"publish-stale:{round(since_publish, 1)}s")
 
         for name, check in checks.items():
             try:
@@ -99,12 +144,27 @@ class HealthState:
         ok, reasons, age, polls_copy = self._evaluate()
         with self._lock:
             published = self._published
+            translation_failures = self._translation_failures
+            last_publish_wall = self._last_publish_wall
+            last_publish_mono = self._last_publish_mono
+        seconds_since_publish = (
+            None
+            if last_publish_mono is None
+            else round(time.monotonic() - last_publish_mono, 1)
+        )
         return {
             "status": "ok" if ok else "stale",
             "reasons": reasons,
             "uptime_seconds": round(time.time() - self.started),
             "seconds_since_heartbeat": round(age, 1),
             "published": published,
+            "translation_failures": translation_failures,
+            "seconds_since_publish": seconds_since_publish,
+            "last_publish_utc": (
+                None
+                if last_publish_wall is None
+                else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_publish_wall))
+            ),
             "last_poll_utc": {
                 name: time.strftime("%H:%M:%S", time.gmtime(value))
                 for name, value in polls_copy.items()

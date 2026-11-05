@@ -90,10 +90,7 @@ class Pipeline:
         if not self._fetch_full_article or item.kind != "rss":
             return
         body = (item.body or "").strip()
-        if (
-            len(body) >= self._article_min_summary
-            and not body.endswith("…")
-        ):
+        if len(body) >= self._article_min_summary and not body.endswith("…"):
             return  # فید خودش متن کامل (یا تقریباً کامل) را داده است
         full = fetch_article_text(
             item.url,
@@ -163,11 +160,20 @@ class Pipeline:
             )
             # آیتم از دیتابیس حذف می‌شود تا چرخه بعدی دوباره تلاش کند.
             self.db.delete_item(item.source_id, fp)
+            if self.health is not None and hasattr(
+                self.health, "mark_translation_failure"
+            ):
+                try:
+                    self.health.mark_translation_failure()
+                except Exception:
+                    pass
             return "translation-failed"
 
         return self._store_event(item, fp, cls, tokens, translation)
 
-    def _store_event(self, item: RawItem, fp: str, cls, tokens: set[str], translation) -> str:
+    def _store_event(
+        self, item: RawItem, fp: str, cls, tokens: set[str], translation
+    ) -> str:
         confidence = "official" if item.tier == 0 else "single"
         event_id, created = self.db.create_event(
             {
@@ -244,7 +250,9 @@ class Pipeline:
 
         if self.cfg.dry_run:
             try:
-                self.bot.send(text, silent=self._silent(event["severity"]), keyboard=keyboard)
+                self.bot.send(
+                    text, silent=self._silent(event["severity"]), keyboard=keyboard
+                )
             except Exception as exc:  # noqa: BLE001
                 log.warning("ارسال تلگرام برای رخداد %d ناموفق بود: %s", event_id, exc)
                 return False
@@ -252,7 +260,9 @@ class Pipeline:
 
         recipients = self._recipients()
         if not recipients:
-            log.warning("گیرنده‌ای ثبت نشده — یک بار در بات /start بزنید یا TELEGRAM_CHAT_ID را در .env بگذارید")
+            log.warning(
+                "گیرنده‌ای ثبت نشده — یک بار در بات /start بزنید یا TELEGRAM_CHAT_ID را در .env بگذارید"
+            )
             return False
 
         delivered = self.db.message_refs(event_id)
@@ -284,7 +294,9 @@ class Pipeline:
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "ارسال تلگرام رخداد %d به گیرنده %s ناموفق بود: %s",
-                    event_id, chat_id, exc,
+                    event_id,
+                    chat_id,
+                    exc,
                 )
                 all_ok = False
                 continue
@@ -306,12 +318,15 @@ class Pipeline:
         """
         if self.cfg.dry_run or not self.bot.configured or not self._recipients():
             return 0
-        window = float(self.cfg.get("app.dedupe_window_hours", 6))
+        # پنجره‌ی ارسال مجدد مستقل از پنجره‌ی خوشه‌بندی است: اگر بات ۹ ساعت
+        # خاموش باشد، رخدادهای آن بازه نباید پس از روشن‌شدن برای همیشه گم
+        # شوند. پیش‌فرض ۷۲ ساعت (پوشش قطع ۱۲ ساعته‌ی سندباکس + حاشیه).
+        window = float(self.cfg.get("poll.flush_window_hours", 72) or 72)
         recipients = set(self._recipients())
         sent = 0
         attempted = 0
         for event in reversed(self.db.recent_events(window)):
-            if attempted >= 5:
+            if attempted >= 20:
                 break
             try:
                 if not event["publishable"]:

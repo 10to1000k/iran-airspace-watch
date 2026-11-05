@@ -181,6 +181,9 @@ class Translator:
                 headers["X-Title"] = "Iran Airspace Watch"
             provider_dead = False
             for model in provider.models:
+                model_key = f"{provider.name}/{model}"
+                if COOLDOWN.is_active(model_key):
+                    continue
                 for attempt in range(2):
                     try:
                         response = requests.post(
@@ -205,6 +208,7 @@ class Translator:
                             provider_dead = True
                             break
                         if response.status_code in (429, 500, 502, 503, 504):
+                            COOLDOWN.record_error(model_key)
                             raise requests.HTTPError(
                                 f"HTTP {response.status_code} از {provider.name}/{model}"
                             )
@@ -214,9 +218,7 @@ class Translator:
                             data["choices"][0]["message"]["content"] or ""
                         ).strip()
                         if not content:
-                            raise ValueError(
-                                f"پاسخ خالی از {provider.name}/{model}"
-                            )
+                            raise ValueError(f"پاسخ خالی از {provider.name}/{model}")
                         if (provider.name, model) != (
                             self.active_provider,
                             self.active_model,
@@ -275,7 +277,9 @@ class Translator:
 
         history_block = ""
         for turn in (history or [])[-6:]:
-            history_block += f"کاربر: {turn.get('q', '')}\nدستیار: {turn.get('a', '')}\n"
+            history_block += (
+                f"کاربر: {turn.get('q', '')}\nدستیار: {turn.get('a', '')}\n"
+            )
 
         system = (
             "You are a friendly, knowledgeable assistant chatting with a user about "
@@ -307,10 +311,15 @@ class Translator:
             f"USER QUESTION:\n{question}"
         )
         try:
-            return self._chat(user_content, system) or "پاسخی از مدل برنگشت؛ دوباره بپرسید."
+            return (
+                self._chat(user_content, system)
+                or "پاسخی از مدل برنگشت؛ دوباره بپرسید."
+            )
         except Exception as exc:  # noqa: BLE001
             log.error("گفت‌وگوی LLM ناموفق بود: %s", exc)
-            return "فعلاً همه‌ی سرویس‌های رایگان پاسخ ندادند؛ چند دقیقه دیگر دوباره بپرسید."
+            return (
+                "فعلاً همه‌ی سرویس‌های رایگان پاسخ ندادند؛ چند دقیقه دیگر دوباره بپرسید."
+            )
 
     # ── API عمومی ────────────────────────────────────────────
     def translate_item(
@@ -329,7 +338,9 @@ class Translator:
 
         if not self.enabled:
             if not self._warned:
-                log.warning("هیچ کلید LLM تنظیم نشده (GEMINI_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY/LLM_API_KEY) — ترجمه غیرفعال است، متن اصلی ارسال می‌شود")
+                log.warning(
+                    "هیچ کلید LLM تنظیم نشده (GEMINI_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY/LLM_API_KEY) — ترجمه غیرفعال است، متن اصلی ارسال می‌شود"
+                )
                 self._warned = True
             raise RuntimeError("LLM_API_KEY تنظیم نشده — ترجمه انجام نمی‌شود")
 
