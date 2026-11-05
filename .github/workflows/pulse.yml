@@ -1,0 +1,109 @@
+# «ضربان» رایگان: اجرای یک چرخه‌ی کامل روی GitHub Actions
+#
+# چرا: Sandbox اوپن‌شیفت هر پاد را بعد از ۱۲ ساعت می‌خواباند و هر ۳۰ روز
+# باید تمدید شود. این ورک‌فلو همان چرخه را بدون هیچ سروری اجرا می‌کند و
+# دیتابیس را در برنچ `state` نگه می‌دارد، پس دِداپ و صف ارسال از دست نمی‌رود.
+#
+# فعال‌سازی (یک‌بار):
+#   Settings → Secrets and variables → Actions → New repository secret
+#     TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / GEMINI_API_KEY (یا GROQ/OPENROUTER)
+#
+# نکته‌ها:
+# - مخزن عمومی است؛ دقیقه‌های Actions نامحدود و رایگان‌اند.
+# - هر بار یک کامیت روی برنچ `state` می‌رود؛ همان «فعالیت» باعث می‌شود
+#   GitHub زمان‌بندی را بعد از ۶۰ روز سکوت غیرفعال نکند.
+# - برنچ main تمیز می‌ماند؛ دیتابیس فقط روی `state` است.
+# - `--once` شنونده‌ی getUpdates ندارد؛ دستورهای /start و /status کار
+#   نمی‌کنند، پس TELEGRAM_CHAT_ID را از قبل ست کن.
+
+name: pulse
+
+on:
+  schedule:
+    # GitHub حداقل ۵ دقیقه است و چند دقیقه جیتر دارد.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# اگر اجرای قبلی هنوز تمام نشده، اجرای جدید صف می‌شود (SQLite و ارسال دوبل).
+concurrency:
+  group: pulse
+  cancel-in-progress: false
+
+jobs:
+  pulse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Restore state database
+        run: |
+          set -e
+          mkdir -p data
+          if git fetch --depth=1 origin state 2>/dev/null; then
+            git show FETCH_HEAD:data/watch.db > data/watch.db
+            echo "state restored ($(stat -c%s data/watch.db) bytes)"
+          else
+            echo "no state branch yet; starting fresh"
+          fi
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run one collection cycle
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ENABLE_X: ${{ vars.ENABLE_X || 'false' }}
+          ENABLE_INSTAGRAM: ${{ vars.ENABLE_INSTAGRAM || 'false' }}
+          HEALTH_ENABLED: "false"
+          LOG_LEVEL: INFO
+        run: python run.py --once
+
+      - name: Save state database
+        if: always()
+        run: |
+          set -e
+          python - <<'PY'
+          import sqlite3
+          conn = sqlite3.connect("data/watch.db")
+          conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+          conn.close()
+          PY
+
+          git config user.name "airwatch-pulse"
+          git config user.email "actions@users.noreply.github.com"
+
+          if git fetch --depth=1 origin state 2>/dev/null; then
+            git worktree add .state FETCH_HEAD
+            (cd .state && git checkout -B state)
+            MODE=amend
+          else
+            git worktree add --detach .state HEAD
+            (cd .state && git checkout --orphan state && git rm -r --cached -q .)
+            MODE=new
+          fi
+
+          mkdir -p .state/data
+          cp data/watch.db .state/data/watch.db
+          # data/*.db در gitignore است، پس اجباری اضافه می‌شود.
+          cd .state
+          git add -f data/watch.db
+          if [ "$MODE" = amend ]; then
+            # یک کامیت ثابت: تاریخچه‌ی برنچ state رشد نمی‌کند.
+            git commit --amend --no-edit --allow-empty
+          else
+            git commit -m "state: watch.db"
+          fi
+          git push --force origin state

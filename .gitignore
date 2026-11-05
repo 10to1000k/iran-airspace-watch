@@ -18,6 +18,7 @@ Thumbs.db
 backups/
 .deploy-*.rendered.yaml
 .superpowers/
+.state/
 .run_tests.py
 .run-tests.bat
 .kill-tests.bat
