@@ -89,6 +89,69 @@ function Render([string]$Source, [string]$Destination) {
     [System.IO.File]::WriteAllText((Join-Path $root $Destination), $text, $utf8)
 }
 
+function Read-DotEnv([string]$Path) {
+    $values = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
+        $idx = $trimmed.IndexOf("=")
+        if ($idx -lt 1) { continue }
+        $key = $trimmed.Substring(0, $idx).Trim()
+        $value = $trimmed.Substring($idx + 1).Trim()
+        if ($value.Length -ge 2) {
+            $first = $value.Substring(0, 1)
+            $last = $value.Substring($value.Length - 1, 1)
+            if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+        $values[$key] = $value
+    }
+    return $values
+}
+
+function Sync-SocialSecrets {
+    $dotenv = Read-DotEnv (Join-Path $root ".env")
+    $keys = @("TWITTER_AUTH_TOKEN", "INSTAGRAM_COOKIE")
+    $dir = Join-Path $root ".deploy-social-secrets"
+    if (Test-Path -LiteralPath $dir) {
+        Remove-Item -LiteralPath $dir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $dir | Out-Null
+
+    $present = @()
+    foreach ($key in $keys) {
+        $value = $dotenv[$key]
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            # بدون newline انتهایی؛ oc محتوای فایل را عیناً مقدار سکرت می‌گیرد.
+            [System.IO.File]::WriteAllText((Join-Path $dir $key), $value, $utf8)
+            $present += $key
+        }
+    }
+
+    if ($present.Count -eq 0) {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    & oc get secret social-feed-secrets *> $null
+    if ($LASTEXITCODE -ne 0) {
+        & oc create secret generic social-feed-secrets *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            Fail "ساخت سکرت social-feed-secrets شکست خورد."
+        }
+    }
+
+    & oc set data secret/social-feed-secrets "--from-file=$dir" | Out-Null
+    $code = $LASTEXITCODE
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    if ($code -ne 0) {
+        Fail "به‌روزرسانی سکرت social-feed-secrets شکست خورد."
+    }
+    return $true
+}
+
 # ── سکرت ──────────────────────────────────────────────────────
 Step "ساخت/به‌روزرسانی سکرت airwatch-secrets"
 # از پوشه‌ی Temp کاربر استفاده نکن؛ در برخی ویندوزها TEMP به مسیر 8.3
@@ -112,6 +175,15 @@ if (Test-Path -LiteralPath $secretFile) {
 }
 Write-Host "   سکرت به‌روز شد" -ForegroundColor DarkGray
 
+# ── سکرت سوشال ────────────────────────────────────────────────
+Step "به‌روزرسانی سکرت social-feed-secrets از .env (در صورت وجود)"
+$socialSecretsUpdated = Sync-SocialSecrets
+if ($socialSecretsUpdated) {
+    Write-Host "   اعتبارنامه‌های سوشال به‌روز شد" -ForegroundColor DarkGray
+} else {
+    Write-Host "   TWITTER_AUTH_TOKEN/INSTAGRAM_COOKIE در .env نیست؛ سکرت سوشال دست‌نخورده ماند" -ForegroundColor DarkGray
+}
+
 # ── منابع بیلد ────────────────────────────────────────────────
 Step "اعمال ImageStream / BuildConfig / PVC"
 Render "deploy/build.yaml" ".deploy-build.rendered.yaml"
@@ -122,6 +194,11 @@ if ($LASTEXITCODE -ne 0) { Fail "اعمال منابع بیلد شکست خور�
 Step "اعمال RSSHub/Redis (کش هشتگ دو دقیقه‌ای)"
 & oc apply -f deploy/social-feed-hub.yaml
 if ($LASTEXITCODE -ne 0) { Fail "اعمال RSSHub/Redis شکست خورد." }
+if ($socialSecretsUpdated) {
+    # envFrom فقط هنگام شروع pod خوانده می‌شود؛ بدون restart کوکی تازه اعمال نمی‌شود.
+    & oc rollout restart deployment/social-feed-hub | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "ری‌استارت RSSHub شکست خورد." }
+}
 & oc rollout status deployment/social-feed-redis --timeout=180s
 if ($LASTEXITCODE -ne 0) { Fail "Redis آماده نشد." }
 & oc rollout status deployment/social-feed-hub --timeout=300s

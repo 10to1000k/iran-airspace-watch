@@ -22,20 +22,24 @@ No Route, LoadBalancer, or public ingress should be created. The bot reaches RSS
 
 ## 2. Add social login material without putting it in Git or chat
 
-RSSHub's X/Instagram routes can require platform session credentials. RSSHub documents X login variables (`TWITTER_USERNAME`, `TWITTER_PASSWORD`, optionally `TWITTER_PHONE_OR_EMAIL` and `TWITTER_AUTHENTICATION_SECRET`) and Instagram cookies (`INSTAGRAM_COOKIE`, including `sessionid` and `ds_user_id`). These are sensitive account credentials; use a low-value/dedicated account, understand that either platform can revoke sessions, and never paste credentials into a conversation or commit them.
+Telegram is read through RSSHub's public preview route (`/telegram/channel/<name>`), which needs **no** session or credential. Three live channels are enabled in `config/sources.yaml` (`social_tg_osintdefender`, `social_tg_theaviationist`, `social_tg_aviationiran`).
 
-Create a local, untracked file `.social-feed-secrets.env` with only the variables you actually need, then apply it:
+RSSHub's X and Instagram routes need platform session credentials and are the only reason `social-feed-secrets` exists:
+
+- **X:** `TWITTER_AUTH_TOKEN` — the `auth_token` cookie from a browser logged in at `x.com` (DevTools → Application → Cookies → `https://x.com`).
+- **Instagram:** `INSTAGRAM_COOKIE` — only `sessionid` and `ds_user_id` are required, formatted as `sessionid=...; ds_user_id=...` (DevTools → Application → Cookies → `https://www.instagram.com`).
+
+Put those two keys in the untracked `.env` on your own machine. `deploy.ps1` and `deploy.sh` read only those keys, write them into the `social-feed-secrets` secret with `oc set data` (leaving any other keys untouched), and restart RSSHub so the new values are loaded. Never paste credentials into a conversation or commit them.
+
+Manual refresh, if you are not running a deploy:
 
 ```powershell
-oc create secret generic social-feed-secrets `
-  --from-env-file=.social-feed-secrets.env `
-  --dry-run=client -o yaml | oc apply -f -
-Remove-Item .social-feed-secrets.env -Force
+oc set data secret/social-feed-secrets --from-literal=TWITTER_AUTH_TOKEN='...' --from-literal=INSTAGRAM_COOKIE='...'
 oc rollout restart deployment/social-feed-hub
 oc rollout status deployment/social-feed-hub --timeout=300s
 ```
 
-Add credentials only on your own machine. Do not place the file in a shared folder. Session-based collection is unofficial and can break or trigger account challenges; it is not equivalent to official API access.
+Sessions expire or get challenged by the platforms. A `401` from `x.com` or an Instagram redirect loop/`429` means the credential is stale; refresh it once and redeploy. Do not repeatedly probe a rate-limited Instagram route from the cluster IP.
 
 ## 3. Test before enabling any feeds
 

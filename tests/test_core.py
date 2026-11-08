@@ -746,6 +746,14 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn("social_x_anadolu", regular_ids)
         self.assertIn("social_x_tag_iran_airspace", social_ids)
         self.assertIn("social_ig_tag_iran_airspace", social_ids)
+        # Telegram public preview routes are ordinary RSS sources: they must
+        # poll every 75s, not sit in the hourly X/Instagram hashtag job.
+        self.assertIn("social_tg_osintdefender", regular_ids)
+        self.assertIn("social_tg_theaviationist", regular_ids)
+        self.assertIn("social_tg_aviationiran", regular_ids)
+        self.assertNotIn("social_tg_osintdefender", social_ids)
+        self.assertNotIn("social_tg_theaviationist", social_ids)
+        self.assertNotIn("social_tg_aviationiran", social_ids)
 
     def test_build_jobs_listens_in_long_running_mode(self):
         from unittest.mock import patch

@@ -17,6 +17,7 @@ data/*.json
 Thumbs.db
 backups/
 .deploy-*.rendered.yaml
+.deploy-social-secrets/
 .superpowers/
 .state/
 .run_tests.py

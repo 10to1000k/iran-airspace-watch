@@ -119,7 +119,8 @@ sources:
   - {id: ir_fars,     name: Fars News,      type: rss, url: "https://www.farsnews.ir/rss", lang: fa, country: IR, tier: 0, enabled: false}
 
   # ── شبکه‌های اجتماعی از مسیر RSSHub خودمیزبان ──
-  # فیدهای پروفایل رسانه‌ها خاموش‌اند؛ پایش اجتماعی فقط از جست‌وجوی هشتگ‌های عمومی است.
+  # تلگرام از پیش‌نمایش عمومی وب فعال است؛ X/Instagram فقط از جست‌وجوی هشتگ.
+  # فیدهای پروفایل X/Instagram خاموش‌اند و در صورت اعتبارنامه‌ی تازه قابل فعال‌سازی‌اند.
   # فیدهای RSS خبرگزاری‌ها در بلوک منابع خبری بالا فعال می‌مانند.
   # مسیرها API رسمی نیستند و ممکن است با تغییرات X/Instagram از کار بیفتند.
   - {id: social_x_anadolu, name: "Anadolu Agency (X)", type: rss, url: "http://social-feed-hub:1200/twitter/user/anadoluagency", lang: en, country: TR, tier: 2, enabled: false}
@@ -133,6 +134,15 @@ sources:
   - {id: social_ig_irna, name: "IRNA English (Instagram)", type: rss, url: "http://social-feed-hub:1200/instagram/user/en.irna.ir", lang: en, country: IR, tier: 0, enabled: false}
   - {id: social_ig_tass, name: "TASS (Instagram)", type: rss, url: "http://social-feed-hub:1200/instagram/user/tass_agency", lang: ru, country: RU, tier: 0, enabled: false}
   - {id: social_ig_aljazeera, name: "Al Jazeera English (Instagram)", type: rss, url: "http://social-feed-hub:1200/instagram/user/aljazeeraenglish", lang: en, country: INTL, tier: 2, enabled: false}
+
+  # تلگرام از مسیر پیش‌نمایش عمومی وب (t.me/s) بدون سشن یا اعتبارنامه.
+  # این کانال‌ها در ۱۴۰۵/۰۸/۱۸ تست زنده شدند و پست تازه داشتند.
+  # چون مسیرشان /telegram/ است، در job عادی RSS (هر ۷۵ ثانیه) خوانده می‌شوند
+  # و مشمول سقف «یک پست در ساعت» شبکه‌های X/Instagram نمی‌شوند.
+  - {id: social_tg_osintdefender, name: "OSINT Defender (Telegram)", type: rss, url: "http://social-feed-hub:1200/telegram/channel/osintdefender", lang: en, country: INTL, tier: 1, max_items_per_feed: 20}
+  - {id: social_tg_theaviationist, name: "The Aviationist (Telegram)", type: rss, url: "http://social-feed-hub:1200/telegram/channel/theaviationist", lang: en, country: INTL, tier: 1, max_items_per_feed: 20}
+  # کانال فارسی هوانوردی ایران؛ پوشش ایران‌ایر، کیش‌ایر، ماهان و اخبار فرودگاه‌ها.
+  - {id: social_tg_aviationiran, name: "Aviation Iran (Telegram)", type: rss, url: "http://social-feed-hub:1200/telegram/channel/aviationiran", lang: fa, country: IR, tier: 1, max_items_per_feed: 20}
 
   # فیدهای هشتگی RSSHub فعال‌اند: هر تگ مستقل است و آیتم‌هایش بدون threshold به بات می‌روند.
   # ۲۵ تگ Instagram در watchlistِ این فیدها زیر سقف ۳۰ جست‌وجوی یکتای هفتگی است؛ 429 را رصد کنید.
