@@ -29,6 +29,8 @@ poll:
   telegram_queue_seconds: 10
   # فقط آیتم‌های تازه‌تر از این بازه پردازش می‌شوند (جلوگیری از سیل اولیه)
   max_item_age_hours: 12
+  # سقف پیام یک‌جا از هر کانال تلگرام در حالت --once (پالس روی GitHub Actions).
+  telegram_max_messages_per_channel: 5
   # رخدادهای «queued» تا این مدت پس از روشن‌شدن دوباره تلاش می‌شوند —
   # مستقل از dedupe_window تا قطع ۱۲ ساعته‌ی سندباکس باعث گم‌شدن نشود.
   flush_window_hours: 72

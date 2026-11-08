@@ -208,6 +208,6 @@ hashtags:
 #     + سشن لاگین — پیام‌ها لحظه‌ای می‌رسند و برای کانال خصوصی لازم است.
 # قواعد: id با tg_ شروع و یکتا باشد؛ lang = زبان غالب کانال (fa/en) برای مسیر صحیح مترجم.
 telegram_channels:
-  - {id: tg_example, name: "نمونه", username: "", enabled: false}
-  # نمونه‌ی واقعی (کافیست enabled را true کنید):
-  # - {id: tg_aviationbrk, name: "AviationBRK", username: "aviationbrk", enabled: true, lang: en}
+  - {id: tg_flightradar24, name: "Flightradar24", username: "flightradar24", enabled: true, lang: en}
+  - {id: tg_aviationbrk, name: "AviationBRK", username: "aviationbrk", enabled: true, lang: en}
+  - {id: tg_simpleflying, name: "Simple Flying", username: "SimpleFlying", enabled: true, lang: en}

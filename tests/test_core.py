@@ -747,6 +747,107 @@ class CollectorTests(unittest.TestCase):
         self.assertIn("social_x_tag_iran_airspace", social_ids)
         self.assertIn("social_ig_tag_iran_airspace", social_ids)
 
+    def test_build_jobs_listens_in_long_running_mode(self):
+        from unittest.mock import patch
+
+        from src.airlines import AirlineIndex
+        from src.collectors import TelegramChannelCollector, build_jobs
+
+        config = load_config(dry_run=True)
+        with patch.dict("os.environ", {"ENABLE_TELEGRAM_CHANNELS": "true"}):
+            with patch.object(TelegramChannelCollector, "start") as start:
+                jobs = build_jobs(
+                    config, db=None, airline_index=AirlineIndex(config.airlines)
+                )
+        start.assert_called_once_with()
+        by_name = {job.name: job for job in jobs}
+        self.assertIn("telegram", by_name)
+        self.assertEqual(by_name["telegram"].fn.__name__, "poll")
+
+    def test_build_jobs_uses_poll_once_without_listener_in_one_shot_mode(self):
+        from unittest.mock import patch
+
+        from src.airlines import AirlineIndex
+        from src.collectors import TelegramChannelCollector, build_jobs
+
+        config = load_config(dry_run=True)
+        with patch.dict("os.environ", {"ENABLE_TELEGRAM_CHANNELS": "true"}):
+            with patch.object(TelegramChannelCollector, "start") as start:
+                jobs = build_jobs(
+                    config,
+                    db=None,
+                    airline_index=AirlineIndex(config.airlines),
+                    one_shot=True,
+                )
+        start.assert_not_called()
+        by_name = {job.name: job for job in jobs}
+        self.assertIn("telegram", by_name)
+        self.assertEqual(by_name["telegram"].fn.__name__, "poll_once")
+
+    def test_run_once_builds_jobs_in_one_shot_mode(self):
+        from unittest.mock import patch
+
+        from src import scheduler
+
+        config = load_config(dry_run=True)
+        with patch.object(scheduler, "Pipeline") as pipeline:
+            with patch.object(scheduler, "build_jobs", return_value=[]) as build_jobs:
+                scheduler.run_once(config, db=None, bot=None)
+        pipeline.return_value.flush_unsent.assert_called_once_with()
+        self.assertIs(build_jobs.call_args.kwargs.get("one_shot"), True)
+
+    def test_poll_once_uses_channel_username_id_and_configured_lang(self):
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from src.collectors import TelegramChannelCollector
+
+        config = load_config(dry_run=True)
+        collector = TelegramChannelCollector(config)
+        collector.enabled = True
+        channel = next(c for c in config.telegram_channels if c.get("lang") == "en")
+        config.sources["telegram_channels"] = [channel]
+
+        class FakeClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+            async def is_user_authorized(self):
+                return True
+
+            async def get_entity(self, entry):
+                return SimpleNamespace(id=999, title="Test channel")
+
+            def iter_messages(self, entity, limit=None):
+                async def messages():
+                    yield SimpleNamespace(
+                        id=42,
+                        message="Iran airspace update",
+                        date=datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc),
+                        peer=SimpleNamespace(username=channel["username"]),
+                    )
+
+                return messages()
+
+        fake_telethon = SimpleNamespace(TelegramClient=FakeClient)
+        with patch.dict(sys.modules, {"telethon": fake_telethon}):
+            with patch.dict(
+                "os.environ",
+                {"TELEGRAM_API_ID": "1", "TELEGRAM_API_HASH": "x"},
+            ):
+                items = collector.poll_once()
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source_id, f"tg_{channel['username']}")
+        self.assertEqual(items[0].lang, channel["lang"])
+
     def test_gdelt_articles_become_items(self):
         from src.collectors import GdeltCollector
 

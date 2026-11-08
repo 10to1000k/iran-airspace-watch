@@ -22,7 +22,7 @@ def run_once(config, db, bot) -> dict[str, int]:
     index = AirlineIndex(config.airlines)
     pipeline = Pipeline(config, db, bot)
     totals: dict[str, int] = {}
-    for job in build_jobs(config, db, index):
+    for job in build_jobs(config, db, index, one_shot=True):
         try:
             items = job.fn()
         except Exception as exc:  # noqa: BLE001

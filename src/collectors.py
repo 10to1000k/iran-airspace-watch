@@ -328,6 +328,9 @@ class TelegramChannelCollector:
     """کانال‌های تلگرام به‌صورت رویدادمحور (تأخیر ۱ تا ۵ ثانیه).
 
     نیاز به `telethon` و TELEGRAM_API_ID/HASH دارد. بات باید عضو کانال باشد.
+    سازگار با هر دو حالت: در `run_forever` گوش می‌دهد، در `--once` (پالس روی
+    GitHub Actions) هم با `poll_once` پیام‌های آخر را یک‌جا می‌گیرد — نه
+    رویدادمحور. سشن از برنچ `state` به‌صورت `data/telegram.session` می‌آید.
     """
 
     def __init__(self, config):
@@ -335,6 +338,9 @@ class TelegramChannelCollector:
         self.queue: queue.Queue[RawItem] = queue.Queue()
         self._thread: threading.Thread | None = None
         self.max_body_chars = int(config.get("poll.max_telegram_body_chars", 1200))
+        self.max_messages_per_channel = int(
+            config.get("poll.telegram_max_messages_per_channel", 5)
+        )
         self.watched = load_watchlist(config)
         self.enabled = _flag_direct(config, "ENABLE_TELEGRAM_CHANNELS") and bool(
             config.telegram_channels
@@ -416,12 +422,111 @@ class TelegramChannelCollector:
         await client.run_until_disconnected()
 
     def poll(self) -> list[RawItem]:
+        return self._drain_queue()
+
+    def _drain_queue(self) -> list[RawItem]:
         items: list[RawItem] = []
         while True:
             try:
                 items.append(self.queue.get_nowait())
             except queue.Empty:
                 break
+        return items
+
+    def poll_once(self) -> list[RawItem]:
+        """# --once: اشتراک تلگرام رویدادمحور نیست؛ پیام‌های آخر را از API می‌گیریم.
+
+        حالت گوش‌دادنِ موجود فقط در `run_forever` معنی دارد. در پالس GitHub
+        Actions فرایند هر ۵ دقیقه یک‌بار بالا می‌آید و فوراً می‌رود، پس باید
+        «آخرین N پیام هر کانال» را واکشی کرد. خطا (سشن لازم، عضو نبودن...)
+        لاگ می‌شود و چرخه می‌ماند، مثل باقی کالکتورها.
+        """
+        if not self.enabled:
+            return []
+        api_id = int(self.cfg.env_get("TELEGRAM_API_ID", "0") or 0)
+        api_hash = self.cfg.env_get("TELEGRAM_API_HASH", "") or ""
+        if not api_id or not api_hash:
+            log.warning("TELEGRAM_API_ID/HASH تنظیم نشده — کالکتور تلگرام غیرفعال")
+            return []
+        try:
+            import telethon  # noqa: F401
+        except ImportError:
+            log.warning("telethon نصب نیست — کالکتور تلگرام غیرفعال شد")
+            self.enabled = False
+            return []
+
+        async def _fetch() -> list[RawItem]:
+            from telethon import TelegramClient
+
+            session = (
+                self.cfg.env_get("TELEGRAM_SESSION", "data/telegram") or "data/telegram"
+            )
+            channels = {c["username"]: c for c in self.cfg.telegram_channels}
+            client = TelegramClient(session, api_id, api_hash)
+            await client.connect()
+            try:
+                if not await client.is_user_authorized():
+                    # لاگین تعاملی در CI ممکن نیست — کاربر باید یک‌بار محلی
+                    # سشن بسازد (python run.py --login-telegram) و در state نگه دارد.
+                    log.warning(
+                        "سشن تلگرام مجاز نیست — یک‌بار سشن بساز: python run.py --login-telegram"
+                    )
+                    return []
+                out: list[RawItem] = []
+                for entry, channel_cfg in channels.items():
+                    try:
+                        entity = await client.get_entity(entry)
+                        async for message in client.iter_messages(
+                            entity, limit=self.max_messages_per_channel
+                        ):
+                            text = (message.message or "").strip()
+                            if not text:
+                                continue
+                            title = text.split("\n", 1)[0][:200]
+                            body = util.truncate(text, self.max_body_chars)
+                            out.append(
+                                RawItem(
+                                    # همان شناسه‌ی کالکتور رویدادمحور تا
+                                    # وضعیت منبع و ضدتکرار یکی باشد.
+                                    source_id=f"tg_{entry}",
+                                    source_name=getattr(entity, "title", None) or entry,
+                                    source_url=f"https://t.me/{entry}",
+                                    title=title,
+                                    body=body,
+                                    url=(
+                                        f"https://t.me/{entry}/{message.id}"
+                                        if entry
+                                        else ""
+                                    ),
+                                    lang=channel_cfg.get("lang", "fa"),
+                                    country="INTL",
+                                    kind="telegram",
+                                    published_at=message.date.astimezone(timezone.utc)
+                                    if message.date
+                                    else util.now_utc(),
+                                    extra={
+                                        "tier": 1,
+                                        "hashtags": extract_hashtags(text),
+                                        "watched_hashtags": watched_hashtags(
+                                            text, self.watched
+                                        ),
+                                    },
+                                )
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("کانال تلگرام %s خوانده نشد: %s", entry, exc)
+                return out
+            finally:
+                await client.disconnect()
+
+        try:
+            items = asyncio.run(_fetch())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("واکشی تلگرام ناموفق بود: %s", exc)
+            items = []
+        items += self._drain_queue()
+        if items:
+            log.info("کالکتور telegram: %d آیتم", len(items))
         return items
 
 
@@ -773,11 +878,15 @@ class CollectorJob:
         self.fn = fn
 
 
-def build_jobs(config, db, airline_index) -> list[CollectorJob]:
+def build_jobs(config, db, airline_index, one_shot: bool = False) -> list[CollectorJob]:
     rss = RssCollector(config, db)
     notam = NotamCollector(config)
     telegram = TelegramChannelCollector(config)
-    telegram.start()
+    if not one_shot:
+        # Only the long-running process owns the always-on Telethon listener.
+        # A one-shot run must use poll_once instead, or every run would open a
+        # duplicate client/session and clash with the live listener (409).
+        telegram.start()
     x = XCollector(config, airline_index)
     instagram = InstagramHashtagCollector(config)
 
@@ -817,7 +926,7 @@ def build_jobs(config, db, airline_index) -> list[CollectorJob]:
             CollectorJob(
                 "telegram",
                 int(config.get("poll.telegram_queue_seconds", 10)),
-                telegram.poll,
+                telegram.poll_once if one_shot else telegram.poll,
             )
         )
     if x.enabled:
