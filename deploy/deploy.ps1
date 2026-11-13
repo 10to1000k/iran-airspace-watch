@@ -134,20 +134,25 @@ function Sync-SocialSecrets {
         return $false
     }
 
-    & oc get secret social-feed-secrets *> $null
-    if ($LASTEXITCODE -ne 0) {
-        & oc create secret generic social-feed-secrets *> $null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
-            Fail "ساخت سکرت social-feed-secrets شکست خورد."
-        }
+    # ساخت YAML و apply به‌جای get/create/set: در namespace تازه، stderr دستور
+    # oc get با ErrorActionPreference=Stop کل اسکریپت را متوقف می‌کرد.
+    $secretYaml = & oc create secret generic social-feed-secrets "--from-file=$dir" --dry-run=client -o yaml
+    if ($LASTEXITCODE -ne 0 -or -not $secretYaml) {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        Fail "ساخت YAML سکرت social-feed-secrets شکست خورد."
     }
-
-    & oc set data secret/social-feed-secrets "--from-file=$dir" | Out-Null
+    $secretFile = Join-Path $root ".deploy-social-secrets.rendered.yaml"
+    [System.IO.File]::WriteAllText(
+        $secretFile,
+        (($secretYaml -join [Environment]::NewLine) + [Environment]::NewLine),
+        $utf8
+    )
+    & oc apply -f $secretFile *> $null
     $code = $LASTEXITCODE
+    Remove-Item -LiteralPath $secretFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     if ($code -ne 0) {
-        Fail "به‌روزرسانی سکرت social-feed-secrets شکست خورد."
+        Fail "اعمال سکرت social-feed-secrets شکست خورد."
     }
     return $true
 }
