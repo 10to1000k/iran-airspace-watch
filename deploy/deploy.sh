@@ -89,6 +89,12 @@ echo "→ اعمال ImageStream / BuildConfig / PVC"
 render deploy/build.yaml | oc apply -f -
 
 # ── RSSHub و Redis ────────────────────────────────────────────
+echo "→ ساخت/به‌روزرسانی ConfigMap پچ اینستاگرام"
+oc create configmap rsshub-ig-patch \
+  --from-file=instagram-tags.mjs=deploy/instagram-tags-patch.mjs \
+  --from-file=rsshub-boot.mjs=deploy/rsshub-boot.mjs \
+  --dry-run=client -o yaml | oc apply -f -
+
 echo "→ اعمال RSSHub/Redis (کش هشتگ دو دقیقه‌ای)"
 oc apply -f deploy/social-feed-hub.yaml
 if [ "$social_secrets_updated" -eq 1 ]; then

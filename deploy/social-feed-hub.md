@@ -6,11 +6,23 @@ This bridge runs **inside the existing OpenShift namespace**. It is internal-onl
 
 The deployment quota is `30Gi` memory request / `30` CPU limits, with the bot currently using `128Mi` requested memory and `50m` CPU. This manifest requests `768Mi` + `250m` for RSSHub and `64Mi` + `25m` for its Redis cache; limits are `1536Mi` + `1 CPU` and `256Mi` + `250m`. That is comfortably inside the reported quota. Storage quota is not increased: Redis is an ephemeral cache. **No separate host is indicated by these numbers.** Actual pod scheduling must still be confirmed in the cluster after applying the manifest.
 
+## Pinned image and the Instagram hashtag shim
+
+The image is pinned to `diygod/rsshub:2026-11-05` on purpose:
+
+- RSSHub `2026-11-06` bumped `x-client-transaction-id` to `0.3.3`. Its X code still sets the old `isInitialized` flag, so every `/twitter/keyword/...` route fails with `ClientTransactionNotInitializedError` before contacting X. `2026-11-05` is the last image where both X keyword and X user routes return `200`.
+- Instagram removed `/api/v1/tags/web_info/` (it now returns `404`). The replacement used here is `POST /api/v1/tags/<tag>/sections/`, which still returns live hashtag media.
+
+RSSHub's `dist/index.mjs` overwrites `globalThis.fetch` while booting, so a normal `--import` preload cannot shim that request. `deploy/rsshub-boot.mjs` therefore loads RSSHub first and only then installs `deploy/instagram-tags-patch.mjs`. `deploy.ps1` / `deploy.sh` publish both files as the `rsshub-ig-patch` ConfigMap; the deployment mounts it at `/patch` and starts with `node --max-http-header-size=32768 /patch/rsshub-boot.mjs`.
+
+Do not move the image to `:latest` until RSSHub fixes the transaction-id incompatibility. Re-test the X keyword and Instagram tag routes from the bot pod after any image change.
+
 ## 1. Deploy on the existing host
 
 From the repository root, after `oc whoami` succeeds:
 
 ```powershell
+# deploy.ps1 / deploy.sh also create the rsshub-ig-patch ConfigMap
 oc apply -f deploy/social-feed-hub.yaml
 oc rollout status deployment/social-feed-redis --timeout=180s
 oc rollout status deployment/social-feed-hub --timeout=300s
@@ -79,6 +91,8 @@ oc logs -f deployment/social-feed-hub
 oc logs -f deployment/social-feed-redis
 oc get pods
 ```
+
+The sandbox Idler can set `spec.replicas=0` on any Deployment. `CronJob/airwatch-keepalive` now checks all three deployments every five minutes (`KEEPALIVE_DEPLOYMENTS=airwatch,social-feed-hub,social-feed-redis` in `deploy/app.yaml`), so the bridge does not silently disappear while the news bot stays alive.
 
 Rollback the optional bridge without touching the news bot:
 

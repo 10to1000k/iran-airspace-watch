@@ -6,6 +6,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -1726,6 +1727,23 @@ class KeepAliveTests(unittest.TestCase):
         )
         self.assertEqual(client.ensure_awake(now=now), "healthy")
         self.assertEqual(session.patches, [])
+
+    def test_targets_can_cover_multiple_deployments(self):
+        from src.keepalive import _targets
+
+        with mock.patch.dict(
+            "os.environ",
+            {"KEEPALIVE_DEPLOYMENTS": "airwatch, social-feed-hub,social-feed-redis"},
+            clear=False,
+        ):
+            self.assertEqual(
+                _targets(),
+                [
+                    ("airwatch", "airwatch"),
+                    ("social-feed-hub", "social-feed-hub"),
+                    ("social-feed-redis", "social-feed-redis"),
+                ],
+            )
 
 
 class SourceConfigTests(unittest.TestCase):

@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 SA_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 DEFAULT_MAX_POD_AGE_SECONDS = 11 * 3600  # ۱۱ ساعت؛ یک ساعت زودتر از سقف ۱۲ ساعت Sandbox
-DEFAULT_MAX_RESTARTS = 40                # پایین‌تر از سقف ۵۰ ری‌استارت در Idler
+DEFAULT_MAX_RESTARTS = 40  # پایین‌تر از سقف ۵۰ ری‌استارت در Idler
 
 
 class KeepAliveClient:
@@ -53,7 +53,9 @@ class KeepAliveClient:
         api_url = os.getenv("K8S_API_URL", "https://kubernetes.default.svc")
 
         token = token_path.read_text(encoding="utf-8").strip()
-        namespace = os.getenv("POD_NAMESPACE") or ns_path.read_text(encoding="utf-8").strip()
+        namespace = (
+            os.getenv("POD_NAMESPACE") or ns_path.read_text(encoding="utf-8").strip()
+        )
         verify: str | bool = str(ca_path) if ca_path.exists() else True
         return cls(api_url=api_url, token=token, namespace=namespace, verify=verify)
 
@@ -75,7 +77,9 @@ class KeepAliveClient:
         `scaled-up` | `restarted` | `healthy`
         """
         current_now = now or util.now_utc()
-        resp = self.http.get(self._deploy_url(deployment), verify=self.verify, timeout=15)
+        resp = self.http.get(
+            self._deploy_url(deployment), verify=self.verify, timeout=15
+        )
         resp.raise_for_status()
         deploy_obj = resp.json()
 
@@ -115,7 +119,10 @@ class KeepAliveClient:
             if status.get("phase") != "Running":
                 continue
             restarts = max(
-                (int(cs.get("restartCount", 0)) for cs in (status.get("containerStatuses") or [])),
+                (
+                    int(cs.get("restartCount", 0))
+                    for cs in (status.get("containerStatuses") or [])
+                ),
                 default=0,
             )
             if restarts >= max_restarts:
@@ -135,9 +142,7 @@ class KeepAliveClient:
             patch = {
                 "spec": {
                     "template": {
-                        "metadata": {
-                            "annotations": {"airwatch.io/restartedAt": stamp}
-                        }
+                        "metadata": {"annotations": {"airwatch.io/restartedAt": stamp}}
                     }
                 }
             }
@@ -160,14 +165,35 @@ class KeepAliveClient:
         return "healthy"
 
 
-def run_keepalive() -> int:
+def _targets() -> list[tuple[str, str]]:
+    """فهرست (deployment, app_label) برای بیدارنگه‌داشتن.
+
+    KEEPALIVE_DEPLOYMENTS با کاما جدا می‌شود و برچسب Pod هر مورد همان نام
+    Deployment است. اگر تنظیم نشده باشد، رفتار تک‌سرویسی قبلی حفظ می‌شود.
+    """
+    raw = os.getenv("KEEPALIVE_DEPLOYMENTS", "").strip()
+    if raw:
+        return [(name.strip(), name.strip()) for name in raw.split(",") if name.strip()]
     deployment = os.getenv("KEEPALIVE_DEPLOYMENT", "airwatch")
     app_label = os.getenv("KEEPALIVE_APP_LABEL", "airwatch")
-    max_age = int(os.getenv("KEEPALIVE_MAX_POD_AGE_SECONDS", str(DEFAULT_MAX_POD_AGE_SECONDS)))
-    client = KeepAliveClient.from_cluster()
-    client.ensure_awake(
-        deployment=deployment,
-        app_label=app_label,
-        max_pod_age_seconds=max_age,
+    return [(deployment, app_label)]
+
+
+def run_keepalive() -> int:
+    max_age = int(
+        os.getenv("KEEPALIVE_MAX_POD_AGE_SECONDS", str(DEFAULT_MAX_POD_AGE_SECONDS))
     )
-    return 0
+    client = KeepAliveClient.from_cluster()
+    failures = 0
+    for deployment, app_label in _targets():
+        try:
+            client.ensure_awake(
+                deployment=deployment,
+                app_label=app_label,
+                max_pod_age_seconds=max_age,
+            )
+        except Exception:  # noqa: BLE001
+            # یک سرویس خراب نباید بقیه را از بیدار شدن محروم کند.
+            failures += 1
+            log.exception("بیدارنگه‌داشتن %s شکست خورد", deployment)
+    return 1 if failures else 0

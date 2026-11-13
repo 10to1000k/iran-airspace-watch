@@ -130,7 +130,9 @@ spec:
   jobTemplate:
     spec:
       ttlSecondsAfterFinished: 120
-      activeDeadlineSeconds: 60
+      # سه Deployment جدا بررسی می‌شود؛ در بدترین حالت (timeout هر فراخوانی)
+      # کمی بیشتر از یک سرویس زمان لازم است.
+      activeDeadlineSeconds: 180
       backoffLimit: 1
       template:
         metadata:
@@ -148,10 +150,10 @@ spec:
               imagePullPolicy: Always
               command: ["python", "run.py", "--keepalive"]
               env:
-                - name: KEEPALIVE_DEPLOYMENT
-                  value: airwatch
-                - name: KEEPALIVE_APP_LABEL
-                  value: airwatch
+                # Idler فقط airwatch را نمی‌خواباند؛ RSSHub/Redis هم باید زنده
+                # بمانند، وگرنه همه‌ی فیدهای X/Instagram/Telegram قطع می‌شوند.
+                - name: KEEPALIVE_DEPLOYMENTS
+                  value: "airwatch,social-feed-hub,social-feed-redis"
               resources:
                 requests:
                   cpu: 10m

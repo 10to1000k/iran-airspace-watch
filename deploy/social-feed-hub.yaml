@@ -85,11 +85,25 @@ spec:
     spec:
       containers:
         - name: rsshub
-          image: diygod/rsshub:latest
-          imagePullPolicy: Always
+          # Pinned: 2026-11-06 shipped x-client-transaction-id 0.3.3, which
+          # breaks every X keyword route with ClientTransactionNotInitializedError.
+          # 2026-11-05 is the last image where keyword search and user feeds both
+          # work. Do not move to :latest until RSSHub fixes the incompatibility.
+          image: diygod/rsshub:2026-11-05
+          imagePullPolicy: IfNotPresent
+          # Custom entrypoint: load RSSHub, then install the Instagram hashtag
+          # shim after RSSHub replaces globalThis.fetch (see rsshub-boot.mjs).
+          command:
+            - node
+            - --max-http-header-size=32768
+            - /patch/rsshub-boot.mjs
           ports:
             - name: http
               containerPort: 1200
+          volumeMounts:
+            - name: ig-patch
+              mountPath: /patch
+              readOnly: true
           env:
             - name: NODE_ENV
               value: production
@@ -135,6 +149,12 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+      volumes:
+        # Created by deploy.ps1/deploy.sh from deploy/rsshub-boot.mjs and
+        # deploy/instagram-tags-patch.mjs.
+        - name: ig-patch
+          configMap:
+            name: rsshub-ig-patch
       securityContext:
         seccompProfile:
           type: RuntimeDefault

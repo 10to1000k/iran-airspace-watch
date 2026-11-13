@@ -191,6 +191,23 @@ Render "deploy/build.yaml" ".deploy-build.rendered.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "اعمال منابع بیلد شکست خورد." }
 
 # ── RSSHub و Redis ────────────────────────────────────────────
+Step "ساخت/به‌روزرسانی ConfigMap پچ اینستاگرام"
+$igPatchYaml = & oc create configmap rsshub-ig-patch `
+    "--from-file=instagram-tags.mjs=$root\deploy\instagram-tags-patch.mjs" `
+    "--from-file=rsshub-boot.mjs=$root\deploy\rsshub-boot.mjs" `
+    --dry-run=client -o yaml
+if ($LASTEXITCODE -ne 0 -or -not $igPatchYaml) { Fail "ساخت ConfigMap پچ اینستاگرام شکست خورد." }
+$igPatchFile = Join-Path $root ".deploy-ig-patch.rendered.yaml"
+[System.IO.File]::WriteAllText(
+    $igPatchFile,
+    (($igPatchYaml -join [Environment]::NewLine) + [Environment]::NewLine),
+    $utf8
+)
+& oc apply -f $igPatchFile *> $null
+$code = $LASTEXITCODE
+Remove-Item -LiteralPath $igPatchFile -Force -ErrorAction SilentlyContinue
+if ($code -ne 0) { Fail "اعمال ConfigMap پچ اینستاگرام شکست خورد." }
+
 Step "اعمال RSSHub/Redis (کش هشتگ دو دقیقه‌ای)"
 & oc apply -f deploy/social-feed-hub.yaml
 if ($LASTEXITCODE -ne 0) { Fail "اعمال RSSHub/Redis شکست خورد." }
