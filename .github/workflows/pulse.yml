@@ -195,7 +195,15 @@ jobs:
           exit 1
 
       - name: Run one collection cycle
-        run: python run.py --once --due
+        env:
+          FORCE_SOCIAL: ${{ inputs.force_social }}
+        run: |
+          set -e
+          if [ "$FORCE_SOCIAL" = "true" ]; then
+            python run.py --once --due --force-social
+          else
+            python run.py --once --due
+          fi
 
       - name: Save state database
         if: always()

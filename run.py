@@ -5,6 +5,7 @@
     python run.py                      # اجرای دائمی
     python run.py --once --dry-run     # یک چرخه، بدون ارسال به تلگرام
     python run.py --once --due         # فقط کالکتورهای سررسیدشده (پالس)
+    python run.py --once --due --force-social  # اجرای اجباری مسیرهای اجتماعی
     python run.py --keepalive          # بیدارنگه‌دارنده‌ی خودکار OpenShift (CronJob)
     python run.py --check-sources      # تست فیدهای RSS
     python run.py --decode-notam "..." # دیکود یک NOTAM
@@ -41,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--due",
         action="store_true",
         help="با --once: فقط کالکتورهایی را اجرا کن که بازه‌شان گذشته است",
+    )
+    parser.add_argument(
+        "--force-social",
+        action="store_true",
+        help="با --once --due: مسیرهای X/Instagram را حتی بدون سررسید اجرا کن",
     )
     parser.add_argument(
         "--keepalive",
@@ -159,7 +165,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         from src.scheduler import run_once
 
-        totals = run_once(config, db, bot, due_only=args.due)
+        totals = run_once(
+            config,
+            db,
+            bot,
+            due_only=args.due,
+            force_jobs={"social_hashtags"} if args.force_social else frozenset(),
+        )
         print(f"نتیجه: {totals or 'هیچ آیتم تازه‌ای نبود'}")
         return 0
 

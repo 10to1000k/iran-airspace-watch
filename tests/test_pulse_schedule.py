@@ -70,6 +70,42 @@ class PulseDueTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_force_social_runs_a_social_job_that_is_not_due(self):
+        from src import scheduler
+
+        config = load_config(dry_run=True)
+        sleeping_job = SimpleNamespace(
+            name="social_hashtags", interval=3600, fn=mock.Mock(return_value=[])
+        )
+        rss_job = SimpleNamespace(
+            name="rss", interval=75, fn=mock.Mock(return_value=[])
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self._db(tmp)
+            try:
+                now = util.now_utc()
+                scheduler.mark_job_run(db, sleeping_job, now=now)
+                scheduler.mark_job_run(db, rss_job, now=now)
+                with (
+                    mock.patch.object(
+                        scheduler, "build_jobs", return_value=[rss_job, sleeping_job]
+                    ),
+                    mock.patch.object(scheduler, "Pipeline") as pipeline,
+                ):
+                    pipeline.return_value.process_many.return_value = {}
+                    scheduler.run_once(
+                        config,
+                        db,
+                        bot=None,
+                        due_only=True,
+                        force_jobs={"social_hashtags"},
+                    )
+
+                sleeping_job.fn.assert_called_once_with()
+                rss_job.fn.assert_not_called()
+            finally:
+                db.close()
+
 
 class PulseCliTests(unittest.TestCase):
     def test_cli_accepts_due_with_once(self):
@@ -78,6 +114,12 @@ class PulseCliTests(unittest.TestCase):
         args = build_parser().parse_args(["--once", "--due"])
         self.assertTrue(args.once)
         self.assertTrue(args.due)
+
+    def test_cli_accepts_force_social(self):
+        from run import build_parser
+
+        args = build_parser().parse_args(["--once", "--due", "--force-social"])
+        self.assertTrue(args.force_social)
 
 
 class OneShotTelegramTests(unittest.TestCase):

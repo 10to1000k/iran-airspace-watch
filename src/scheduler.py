@@ -33,7 +33,13 @@ def mark_job_run(db, job, now=None) -> None:
     db.kv_set(f"{PULSE_LAST_PREFIX}{job.name}", util.iso(now or util.now_utc()))
 
 
-def run_once(config, db, bot, due_only: bool = False) -> dict[str, int]:
+def run_once(
+    config,
+    db,
+    bot,
+    due_only: bool = False,
+    force_jobs: set[str] | frozenset[str] = frozenset(),
+) -> dict[str, int]:
     index = AirlineIndex(config.airlines)
     pipeline = Pipeline(config, db, bot)
 
@@ -50,7 +56,7 @@ def run_once(config, db, bot, due_only: bool = False) -> dict[str, int]:
 
     totals: dict[str, int] = {}
     for job in build_jobs(config, db, index, one_shot=True):
-        if due_only and not job_due(db, job):
+        if due_only and job.name not in force_jobs and not job_due(db, job):
             log.info("کالکتور %s هنوز سررسید نیست؛ رد شد", job.name)
             continue
         try:
