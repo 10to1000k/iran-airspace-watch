@@ -4,6 +4,7 @@
 نمونه‌ها:
     python run.py                      # اجرای دائمی
     python run.py --once --dry-run     # یک چرخه، بدون ارسال به تلگرام
+    python run.py --once --due         # فقط کالکتورهای سررسیدشده (پالس)
     python run.py --keepalive          # بیدارنگه‌دارنده‌ی خودکار OpenShift (CronJob)
     python run.py --check-sources      # تست فیدهای RSS
     python run.py --decode-notam "..." # دیکود یک NOTAM
@@ -36,12 +37,29 @@ def build_parser() -> argparse.ArgumentParser:
         description="پایش اخبار حریم هوایی ایران و ارسال فوری به تلگرام",
     )
     parser.add_argument("--once", action="store_true", help="یک چرخه اجرا کن و خارج شو")
-    parser.add_argument("--keepalive", action="store_true", help="بررسی و بیدار نگه‌داشتن Deployment در OpenShift")
-    parser.add_argument("--dry-run", action="store_true", help="بدون تماس با تلگرام، چاپ در کنسول")
-    parser.add_argument("--check-sources", action="store_true", help="تست سلامت فیدهای RSS")
+    parser.add_argument(
+        "--due",
+        action="store_true",
+        help="با --once: فقط کالکتورهایی را اجرا کن که بازه‌شان گذشته است",
+    )
+    parser.add_argument(
+        "--keepalive",
+        action="store_true",
+        help="بررسی و بیدار نگه‌داشتن Deployment در OpenShift",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="بدون تماس با تلگرام، چاپ در کنسول"
+    )
+    parser.add_argument(
+        "--check-sources", action="store_true", help="تست سلامت فیدهای RSS"
+    )
     parser.add_argument("--decode-notam", metavar="TEXT", help="دیکود یک NOTAM خام")
-    parser.add_argument("--build-watchlist", action="store_true", help="ساخت گزارش لیست ایرلاین‌ها")
-    parser.add_argument("--days", type=int, default=30, help="بازه‌ی گزارش OpenSky (پیش‌فرض ۳۰)")
+    parser.add_argument(
+        "--build-watchlist", action="store_true", help="ساخت گزارش لیست ایرلاین‌ها"
+    )
+    parser.add_argument(
+        "--days", type=int, default=30, help="بازه‌ی گزارش OpenSky (پیش‌فرض ۳۰)"
+    )
     parser.add_argument("--test-message", action="store_true", help="ارسال پیام نمونه")
     parser.add_argument("--stats", action="store_true", help="آمار دیتابیس")
     parser.add_argument("--verbose", "-v", action="store_true", help="لاگ کامل")
@@ -115,7 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         from src.collectors import check_sources
 
         failures = check_sources(config, db)
-        print(f"\n{'همه‌ی فیدها سالم‌اند.' if not failures else f'{failures} فید مشکل دارد.'}")
+        print(
+            f"\n{'همه‌ی فیدها سالم‌اند.' if not failures else f'{failures} فید مشکل دارد.'}"
+        )
         notam = NotamCollector(config)
         print(f"NOTAM: {'فعال' if notam.enabled else 'غیرفعال (کلید FAA تنظیم نشده)'}")
         return 0 if not failures else 1
@@ -129,13 +149,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.test_message:
         text = format_event(sample_event(), config)
         message_id = bot.send(text, keyboard=None)
-        print("پیام آزمایشی ارسال شد." if message_id else "ارسال نشد (dry-run یا بدون گیرنده).")
+        print(
+            "پیام آزمایشی ارسال شد."
+            if message_id
+            else "ارسال نشد (dry-run یا بدون گیرنده)."
+        )
         return 0
 
     if args.once:
         from src.scheduler import run_once
 
-        totals = run_once(config, db, bot)
+        totals = run_once(config, db, bot, due_only=args.due)
         print(f"نتیجه: {totals or 'هیچ آیتم تازه‌ای نبود'}")
         return 0
 

@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 
+from . import util
 from .airlines import AirlineIndex
 from .collectors import build_jobs
 from .health import HealthServer, HealthState
@@ -16,13 +17,42 @@ from .pipeline import Pipeline
 log = logging.getLogger(__name__)
 
 PRUNE_INTERVAL_SECONDS = 24 * 3600
+PULSE_LAST_PREFIX = "pulse_last:"
 
 
-def run_once(config, db, bot) -> dict[str, int]:
+def job_due(db, job, now=None) -> bool:
+    """آیا بازه‌ی این کالکتور از آخرین اجرا گذشته است؟"""
+    previous = util.parse_iso(db.kv_get(f"{PULSE_LAST_PREFIX}{job.name}"))
+    if previous is None:
+        return True
+    now = now or util.now_utc()
+    return (now - previous).total_seconds() >= max(0, int(job.interval))
+
+
+def mark_job_run(db, job, now=None) -> None:
+    db.kv_set(f"{PULSE_LAST_PREFIX}{job.name}", util.iso(now or util.now_utc()))
+
+
+def run_once(config, db, bot, due_only: bool = False) -> dict[str, int]:
     index = AirlineIndex(config.airlines)
     pipeline = Pipeline(config, db, bot)
+
+    # در پالس، فرایند دائمی وجود ندارد؛ دستورهای تلگرام (/start، /status…)
+    # را یک‌بار از صف getUpdates می‌خوانیم تا کاربر بدون کار دستی ثبت شود.
+    poll_updates = getattr(bot, "poll_updates_once", None)
+    if poll_updates:
+        try:
+            handled = poll_updates()
+            if handled:
+                log.info("%d دستور تلگرام در حالت پالس پردازش شد", handled)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("خواندن دستورهای تلگرام در حالت پالس ناموفق بود: %s", exc)
+
     totals: dict[str, int] = {}
     for job in build_jobs(config, db, index, one_shot=True):
+        if due_only and not job_due(db, job):
+            log.info("کالکتور %s هنوز سررسید نیست؛ رد شد", job.name)
+            continue
         try:
             items = job.fn()
         except Exception as exc:  # noqa: BLE001
@@ -32,6 +62,7 @@ def run_once(config, db, bot) -> dict[str, int]:
             log.info("کالکتور %s: %d آیتم", job.name, len(items))
         for key, value in pipeline.process_many(items).items():
             totals[key] = totals.get(key, 0) + value
+        mark_job_run(db, job)
     pipeline.flush_unsent()
     return totals
 

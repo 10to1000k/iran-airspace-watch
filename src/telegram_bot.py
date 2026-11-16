@@ -34,7 +34,9 @@ class TelegramBot:
         self.dry_run = config.dry_run
         self._stop = threading.Event()
         self._conflict_count = 0
-        self.chat_responder = None  # Pipeline ست می‌کند: (event, question, history) -> str
+        self.chat_responder = (
+            None  # Pipeline ست می‌کند: (event, question, history) -> str
+        )
         self._thread: threading.Thread | None = None
         self._on_ready_callbacks: list = []
 
@@ -286,12 +288,15 @@ class TelegramBot:
 
     # ── کیبورد ───────────────────────────────────────────────
     def feedback_keyboard(self, event_id: int, url: str = "") -> list:
-        rows = [[
-            {"text": "👍 مفید", "callback_data": f"fb:up:{event_id}"},
-            {"text": "👎 بی‌ربط", "callback_data": f"fb:down:{event_id}"},
-        ], [
-            {"text": "💬 گفت‌وگو درباره‌ی خبر", "callback_data": f"ask:{event_id}"},
-        ]]
+        rows = [
+            [
+                {"text": "👍 مفید", "callback_data": f"fb:up:{event_id}"},
+                {"text": "👎 بی‌ربط", "callback_data": f"fb:down:{event_id}"},
+            ],
+            [
+                {"text": "💬 گفت‌وگو درباره‌ی خبر", "callback_data": f"ask:{event_id}"},
+            ],
+        ]
         if url.startswith("http"):
             rows.append([{"text": "🔗 متن اصلی", "url": url}])
         return rows
@@ -332,7 +337,9 @@ class TelegramBot:
             return []
         return history if isinstance(history, list) else []
 
-    def _save_chat_turn(self, chat_id: str, event_id: int, question: str, answer: str) -> None:
+    def _save_chat_turn(
+        self, chat_id: str, event_id: int, question: str, answer: str
+    ) -> None:
         history = self._chat_history(chat_id, event_id)
         history.append({"q": question[:500], "a": answer[:1500]})
         self.db.kv_set(
@@ -348,7 +355,9 @@ class TelegramBot:
         event = self.db.get_event(event_id)
         if not event:
             self._deactivate_chat(chat_id)
-            self.send("آن خبر دیگر در دسترس نیست؛ حالت گفت‌وگو بسته شد.", chat_id=chat_id)
+            self.send(
+                "آن خبر دیگر در دسترس نیست؛ حالت گفت‌وگو بسته شد.", chat_id=chat_id
+            )
             return True
         if self.chat_responder is None:
             self.send(
@@ -363,6 +372,40 @@ class TelegramBot:
         return True
 
     # ── شنونده ───────────────────────────────────────────────
+    def poll_updates_once(self) -> int:
+        """در حالت یک‌باره (پالس) دستورهای تلگرام را یک‌جا پردازش می‌کند.
+
+        فرایند دائمی وجود ندارد که getUpdates را زنده نگه دارد؛ بدون این
+        متد، `/start` در GitHub Actions هرگز ثبت نمی‌شد و گیرنده‌ای ساخته
+        نمی‌شد. offset در دیتابیس ذخیره می‌شود تا هر آپدیت فقط یک‌بار
+        پردازش شود.
+        """
+        if not self.listener_enabled:
+            return 0
+        offset = int(self.db.kv_get("tg_offset", "0") or 0)
+        updates = self._call(
+            "getUpdates",
+            {
+                "offset": offset,
+                "timeout": 0,
+                "limit": 100,
+                "allowed_updates": ["message", "callback_query"],
+            },
+            timeout=20,
+            retries=1,
+        )
+        handled = 0
+        for update in updates or []:
+            if not isinstance(update, dict) or "update_id" not in update:
+                continue
+            self.db.kv_set("tg_offset", str(int(update["update_id"]) + 1))
+            try:
+                self._handle_update(update)
+                handled += 1
+            except Exception:  # noqa: BLE001
+                log.exception("پردازش آپدیت تلگرام در حالت پالس ناموفق")
+        return handled
+
     def start_listener(self) -> None:
         if not self.listener_enabled:
             log.info("شنونده‌ی تلگرام غیرفعال است (توکن ندارد یا dry-run است)")
@@ -586,7 +629,9 @@ class TelegramBot:
         if command == "/chat":
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                self.send("استفاده: /chat <شماره‌ی خبر>\nمثال: /chat 42", chat_id=chat_id)
+                self.send(
+                    "استفاده: /chat <شماره‌ی خبر>\nمثال: /chat 42", chat_id=chat_id
+                )
                 return
             try:
                 event_id = int(parts[1])
@@ -613,9 +658,7 @@ class TelegramBot:
 
         # دکمه‌ی گفت‌وگو: ask:<id> (فعلی) و chat:open:<id> (پیام‌های قدیمی‌تر)
         is_ask = len(parts) == 2 and parts[0] == "ask"
-        is_legacy_chat = (
-            len(parts) == 3 and parts[0] == "chat" and parts[1] == "open"
-        )
+        is_legacy_chat = len(parts) == 3 and parts[0] == "chat" and parts[1] == "open"
         if is_ask or is_legacy_chat:
             chat = (callback.get("message") or {}).get("chat") or {}
             sender = callback.get("from") or {}
