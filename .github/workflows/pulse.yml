@@ -27,6 +27,11 @@ on:
     # GitHub حداقل ۵ دقیقه است و چند دقیقه جیتر دارد.
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      force_social:
+        description: "اجرای اجباری مسیرهای X/Instagram (RSSHub)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -77,9 +82,13 @@ jobs:
 
       - name: Check whether hourly social routes are due
         id: due
+        env:
+          FORCE_SOCIAL: ${{ inputs.force_social }}
         run: |
           set -e
           python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+
           from src.airlines import AirlineIndex
           from src.collectors import build_jobs
           from src.config import load_config
@@ -95,7 +104,10 @@ jobs:
               social = next(
                   (job for job in jobs if job.name == "social_hashtags"), None
               )
-              print(f"social={'yes' if social and job_due(db, social) else 'no'}")
+              forced = os.getenv("FORCE_SOCIAL", "").lower() == "true"
+              print(
+                  f"social={'yes' if forced or (social and job_due(db, social)) else 'no'}"
+              )
           finally:
               db.close()
           PY
@@ -147,9 +159,15 @@ jobs:
           docker run -d --name airwatch-redis --network airwatch \
             redis:7-alpine \
             redis-server --save "" --appendonly no --dir /tmp
+          # .env مقدار TELEGRAM_SESSION را برای Telethon روی مسیر فایل
+          # (`data/telegram`) می‌گذارد، ولی RSSHub همان نام را رشته‌ی
+          # StringSession می‌داند و با مقدار غیرخالی سراغ MTProto می‌رود؛
+          # نتیجه ۵۰۳ برای همه‌ی کانال‌های تلگرام بود. برای RSSHub خالی
+          # می‌کنیم تا از پیش‌نمایش عمومی t.me/s استفاده کند.
           docker run -d --name airwatch-rsshub --network airwatch \
             -p 127.0.0.1:1200:1200 \
             --env-file .env \
+            -e TELEGRAM_SESSION= \
             -e NODE_ENV=production \
             -e CACHE_TYPE=redis \
             -e CACHE_EXPIRE=120 \
