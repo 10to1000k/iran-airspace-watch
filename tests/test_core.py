@@ -1146,6 +1146,38 @@ class TranslatorTests(unittest.TestCase):
         # کلید بد فقط یک بار امتحان شده، نه برای هر مدل/تلاش
         self.assertEqual(sum("generativelanguage" in u for u in calls), 1)
 
+    def test_foreign_translation_rejects_untranslated_headline(self):
+        from unittest import mock
+
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        output = "---\nTITLE: Iran closes airspace\n---\nBODY: Airspace is closed\n---"
+        with mock.patch.object(translator, "_chat", return_value=output):
+            with self.assertRaisesRegex(RuntimeError, "فارسی نیست"):
+                translator.translate_item(
+                    "Iran closes airspace", "Airspace is closed", "en"
+                )
+
+    def test_foreign_translation_cleans_labels_and_requires_persian_title(self):
+        from unittest import mock
+
+        from src.translator import Translator
+
+        translator = Translator(load_config(), db=None)
+        translator.api_key = "test-key"
+        with mock.patch.object(
+            translator,
+            "_chat",
+            return_value="---\nTITLE: ایران حریم هوایی را بست\n---\nBODY: پروازها متوقف شدند\n---",
+        ):
+            result = translator.translate_item(
+                "Iran closes airspace", "Flights are suspended", "en"
+            )
+        self.assertEqual(result.title_fa, "ایران حریم هوایی را بست")
+        self.assertEqual(result.text_fa, "پروازها متوقف شدند")
+
     def test_persian_passthrough_needs_no_network(self):
         from src.translator import Translator
 

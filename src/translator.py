@@ -147,6 +147,16 @@ class Translator:
         if self.db:
             self.db.kv_set(f"tr:{key}", value)
 
+    def _cache_delete(self, key: str) -> None:
+        self._memory_cache.pop(key, None)
+        if self.db and hasattr(self.db, "kv_delete"):
+            self.db.kv_delete(f"tr:{key}")
+
+    @staticmethod
+    def _has_persian_text(text: str) -> bool:
+        """ترجمه‌ی خبر خارجی باید واقعاً متن فارسی داشته باشد؛ کدها/نام‌ها لاتین می‌مانند."""
+        return any("\u0600" <= char <= "\u06ff" for char in text)
+
     # ── فراخوانی LLM ─────────────────────────────────────────
     def _term_block(self, text: str) -> str:
         norm = util.normalize(text)
@@ -360,12 +370,18 @@ class Translator:
         cached = self._cache_get(cache_key)
         if cached:
             parts = cached.split("\n", 1)
-            return Translation(
-                text_fa=parts[1] if len(parts) > 1 else cached,
-                title_fa=parts[0],
-                engine="cache",
-                numbers_ok=util.numbers_preserved(f"{title} {body}", cached),
-            )
+            cached_title = parts[0]
+            cached_body = parts[1] if len(parts) > 1 else cached
+            if lang != "fa" and not self._has_persian_text(cached_title):
+                # Cacheهای قدیمیِ متنِ خام هم نباید بی‌صدا به‌عنوان ترجمه منتشر شوند.
+                self._cache_delete(cache_key)
+            else:
+                return Translation(
+                    text_fa=cached_body,
+                    title_fa=cached_title,
+                    engine="cache",
+                    numbers_ok=util.numbers_preserved(f"{title} {body}", cached),
+                )
 
         system = SYSTEM_PROMPT.format(terms=self._term_block(f"{title} {body} {raw}"))
         instruction = (
@@ -383,14 +399,31 @@ class Translator:
             # Pipeline will catch RuntimeError → delete item and retry.
             raise RuntimeError(f"ترجمة ناموفق بود: {exc}") from exc
 
-        if "---" in output:
+        # پاسخ قالب‌بندی‌شده معمولاً با جداکننده‌ی مستقل شروع می‌شود:
+        # --- / TITLE: ... / --- / BODY: ... / --- . split ساده‌ی قبلی تیتر را
+        # خالی می‌کرد؛ سپس _store_event تیتر اصلی انگلیسی را جایگزین می‌کرد.
+        parts = [
+            part.strip()
+            for part in re.split(r"(?m)^\s*---\s*$", output.strip())
+            if part.strip()
+        ]
+        if len(parts) >= 2 and re.match(r"^(?:TITLE|HEADLINE)\s*:", parts[0], re.I):
+            head = re.sub(
+                r"^(?:TITLE|HEADLINE)\s*:\s*", "", parts[0], count=1, flags=re.I
+            )
+            body_fa = re.sub(r"^BODY\s*:\s*", "", parts[1], count=1, flags=re.I)
+        elif "---" in output:
             head, body_fa = output.split("---", 1)
+            head = re.sub(r"^(?:TITLE|HEADLINE)\s*:\s*", "", head.strip(), flags=re.I)
+            body_fa = re.sub(r"^BODY\s*:\s*", "", body_fa.strip(), count=1, flags=re.I)
         else:
             lines = [line for line in output.splitlines() if line.strip()]
             head = lines[0] if lines else title
             body_fa = "\n".join(lines[1:]) or output
         head = head.strip().strip("#").strip()
         body_fa = body_fa.strip()
+        if lang != "fa" and not self._has_persian_text(head):
+            raise RuntimeError("خروجی مدل فارسی نیست؛ انتشار متن اصلی به‌عنوان ترجمه متوقف شد")
 
         self._cache_set(cache_key, f"{head}\n{body_fa}")
         ok = util.numbers_preserved(f"{title} {body} {raw}", f"{head} {body_fa}")
