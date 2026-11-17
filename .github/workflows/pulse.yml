@@ -32,6 +32,10 @@ on:
         description: "اجرای اجباری مسیرهای X/Instagram (RSSHub)"
         type: boolean
         default: false
+  # کرون خارجی (مثلاً Cloudflare Worker) برای غلبه بر تأخیر/حذف زمانبندی
+  # GitHub این رویداد را هر چند دقیقه میزند؛ پالس مثل اجرای عادی کار میکند.
+  repository_dispatch:
+    types: [airwatch-tick]
 
 permissions:
   contents: write
@@ -45,6 +49,11 @@ jobs:
   pulse:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # گیرنده ثابت: اگر برنچ state ریست شد یا /start مصرف نشد، باز هم پیامها
+    # به مقصد میرسند. load_dotenv مقدار محیط را overriding نمیکند، پس این
+    # مقدار بر TELEGRAM_CHAT_ID خالیِ داخل .env برتری دارد.
+    env:
+      TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
     steps:
       - uses: actions/checkout@v4
 

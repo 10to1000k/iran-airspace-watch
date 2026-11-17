@@ -1,0 +1,8 @@
+name = "airwatch-pulse-cron"
+main = "src/index.js"
+compatibility_date = "2026-11-17"
+
+[triggers]
+# هر ۱۵ دقیقه: با اجرای معمولی ۵–۱۲ دقیقهای پالس هماهنگ است و از انباشته
+# شدن اجراهای درصف در concurrency group جلوگیری میکند.
+crons = ["*/15 * * * *"]
